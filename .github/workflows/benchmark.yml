@@ -1,0 +1,64 @@
+name: Continuous Benchmark (Go)
+
+on:
+  push:
+    branches:
+      - main
+  # Optionally run on a schedule to collect regular data
+  schedule:
+    - cron: '0 3 * * 1'
+
+permissions:
+  contents: write
+  deployments: write
+
+jobs:
+  benchmark:
+    name: Performance regression check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: stable
+
+      - name: Run Go benchmarks
+        run: |
+          go version
+          # Run all benchmarks without running tests, include memory stats
+          go test -bench . -benchmem -run ^$ ./... | tee output.txt
+
+      - name: Download previous benchmark data (cache baseline)
+        uses: actions/cache@v4
+        with:
+          path: ./cache
+          key: ${{ runner.os }}-benchmark-${{ github.ref_name }}
+          restore-keys: |
+            ${{ runner.os }}-benchmark-
+
+      - name: Update cache baseline with current results
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: mdid Go Benchmarks
+          tool: go
+          output-file-path: output.txt
+          external-data-json-path: ./cache/benchmark-data.json
+          # Don't fail the main build; alerts go to comments
+          fail-on-alert: false
+          comment-on-alert: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Store benchmark result to GitHub Pages
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          name: mdid Go Benchmarks
+          tool: go
+          output-file-path: output.txt
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          auto-push: true
+          # Optional alerting without failing the workflow
+          comment-on-alert: true
+          alert-threshold: '200%'
