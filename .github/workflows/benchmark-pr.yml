@@ -29,7 +29,7 @@ jobs:
           go test -bench . -benchmem -run ^$ ./... | tee output.txt
 
       - name: Restore baseline benchmark cache from base branch
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ./cache
           key: ${{ runner.os }}-benchmark-${{ github.base_ref }}
