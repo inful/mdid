@@ -429,6 +429,25 @@ func testProcessFileErrors(t *testing.T, tmpDir string) {
 			t.Errorf("ProcessFile() error = %v, want 'failed to process content' error", err)
 		}
 	})
+
+	t.Run("symlink file returns error", func(t *testing.T) {
+		target := filepath.Join(tmpDir, "target.md")
+		link := filepath.Join(tmpDir, "link.md")
+		if err := os.WriteFile(target, []byte("# Symlink target"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("os.Symlink not supported: %v", err)
+		}
+
+		err := ProcessFile(link)
+		if err == nil {
+			t.Error("ProcessFile() expected error for symlink")
+		}
+		if !strings.Contains(err.Error(), "symlink") {
+			t.Errorf("ProcessFile() error = %v, want symlink error", err)
+		}
+	})
 }
 
 func TestProcessFile(t *testing.T) {

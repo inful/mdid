@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,10 +19,7 @@ const FrontmatterDelimiter = "---"
 // UIDField is the field name used in frontmatter for the unique identifier.
 const UIDField = "uid"
 
-const (
-	filePermissions = 0o600
-	growthOverhead  = 4
-)
+const growthOverhead = 4
 
 // UUID v7 byte layout constants (RFC 9562, Section 5.7).
 const (
@@ -177,13 +175,16 @@ func ProcessContentAtTime(content string, t time.Time) (string, error) {
 // The uid timestamp is derived from the file's modification time so that
 // documents are time-sortable by when they were last edited. If the file
 // already contains a uid it is left untouched.
-func ProcessFile(filepath string) error {
-	info, err := os.Stat(filepath)
+func ProcessFile(path string) error {
+	info, err := os.Lstat(path)
 	if err != nil {
 		return fmt.Errorf("failed to stat file: %w", err)
 	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to process symlink: %s", path)
+	}
 
-	content, err := os.ReadFile(filepath) //nolint:gosec
+	content, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
@@ -198,8 +199,44 @@ func ProcessFile(filepath string) error {
 		return nil
 	}
 
-	if err = os.WriteFile(filepath, []byte(processed), filePermissions); err != nil {
+	if err = writeFileAtomic(path, []byte(processed), info.Mode().Perm()); err != nil {
 		return fmt.Errorf("failed to write file: %w", err)
+	}
+
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) (retErr error) {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmp, err := os.CreateTemp(dir, "."+base+".mdid-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+
+	if err = os.Rename(tmp.Name(), path); err != nil {
+		return err
 	}
 
 	return nil

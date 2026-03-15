@@ -72,9 +72,12 @@ func main() {
 }
 
 func processPath(path string) error {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("'%s' is a symlink (skipped)", path)
 	}
 
 	if info.IsDir() {
@@ -118,7 +121,7 @@ func processDirectory(dir string) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
+		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
 			return nil
 		}
 		if err := processFile(path); err != nil {
@@ -138,6 +141,14 @@ func processDirectory(dir string) error {
 }
 
 func processFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("failed to stat file: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("refusing to process symlink: %s", path)
+	}
+
 	content, err := os.ReadFile(path) //nolint:gosec
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
@@ -156,12 +167,48 @@ func processFile(path string) error {
 		return nil
 	}
 
-	if err = os.WriteFile(path, []byte(processed), filePermissions); err != nil {
+	if err = writeFileAtomic(path, []byte(processed), info.Mode().Perm()); err != nil {
 		return fmt.Errorf("failed to write %s: %w", path, err)
 	}
 
 	if verboseMode {
 		fmt.Fprintf(os.Stderr, "[ok] %s: uid added\n", path)
+	}
+
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte, perm os.FileMode) (retErr error) {
+	dir := filepath.Dir(path)
+	base := filepath.Base(path)
+	tmp, err := os.CreateTemp(dir, "."+base+".mdid-*")
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if retErr != nil {
+			_ = os.Remove(tmp.Name())
+		}
+	}()
+
+	if _, err = tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Chmod(perm); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err = tmp.Close(); err != nil {
+		return err
+	}
+
+	if err = os.Rename(tmp.Name(), path); err != nil {
+		return err
 	}
 
 	return nil

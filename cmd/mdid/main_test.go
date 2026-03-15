@@ -139,38 +139,75 @@ func TestProcessStdin(t *testing.T) {
 	})
 }
 
+func testProcessPathDirectoryRequiresRecursive(t *testing.T) {
+	t.Helper()
+	setModes(t, false, false)
+
+	err := processPath(t.TempDir())
+	if err == nil {
+		t.Fatal("processPath() expected directory error without recursive mode")
+	}
+	if !strings.Contains(err.Error(), "use -r") {
+		t.Fatalf("processPath() error = %v, want hint for -r", err)
+	}
+}
+
+func testProcessPathProcessesFile(t *testing.T) {
+	t.Helper()
+	setModes(t, false, false)
+
+	f := filepath.Join(t.TempDir(), "doc.md")
+	if err := os.WriteFile(f, []byte("# hello"), filePermissions); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := processPath(f); err != nil {
+		t.Fatalf("processPath() error = %v", err)
+	}
+
+	got, err := os.ReadFile(f) //nolint:gosec
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "uid:") {
+		t.Fatal("processPath() did not update markdown file")
+	}
+}
+
+func testProcessPathRejectsSymlink(t *testing.T) {
+	t.Helper()
+	setModes(t, false, false)
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.md")
+	link := filepath.Join(dir, "link.md")
+	if err := os.WriteFile(target, []byte("# hello"), filePermissions); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("os.Symlink not supported: %v", err)
+	}
+
+	err := processPath(link)
+	if err == nil {
+		t.Fatal("processPath() expected symlink error")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("processPath() error = %v, want symlink error", err)
+	}
+}
+
 func TestProcessPath(t *testing.T) {
 	t.Run("directory requires recursive mode", func(t *testing.T) {
-		setModes(t, false, false)
-
-		err := processPath(t.TempDir())
-		if err == nil {
-			t.Fatal("processPath() expected directory error without recursive mode")
-		}
-		if !strings.Contains(err.Error(), "use -r") {
-			t.Fatalf("processPath() error = %v, want hint for -r", err)
-		}
+		testProcessPathDirectoryRequiresRecursive(t)
 	})
 
 	t.Run("file path is processed", func(t *testing.T) {
-		setModes(t, false, false)
+		testProcessPathProcessesFile(t)
+	})
 
-		f := filepath.Join(t.TempDir(), "doc.md")
-		if err := os.WriteFile(f, []byte("# hello"), filePermissions); err != nil {
-			t.Fatal(err)
-		}
-
-		if err := processPath(f); err != nil {
-			t.Fatalf("processPath() error = %v", err)
-		}
-
-		got, err := os.ReadFile(f) //nolint:gosec
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(got), "uid:") {
-			t.Fatal("processPath() did not update markdown file")
-		}
+	t.Run("symlink path is rejected", func(t *testing.T) {
+		testProcessPathRejectsSymlink(t)
 	})
 }
 
@@ -210,6 +247,35 @@ func testProcessDirectoryProcessesMarkdown(t *testing.T) {
 	}
 }
 
+func testProcessDirectorySkipsSymlinkEntries(t *testing.T) {
+	t.Helper()
+
+	setModes(t, true, false)
+
+	dir := t.TempDir()
+
+	target := filepath.Join(dir, "target.txt")
+	link := filepath.Join(dir, "symlink.md")
+	if err := os.WriteFile(target, []byte("# target"), filePermissions); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("os.Symlink not supported: %v", err)
+	}
+
+	if err := processDirectory(dir); err != nil {
+		t.Fatalf("processDirectory() error = %v", err)
+	}
+
+	targetGot, err := os.ReadFile(target) //nolint:gosec
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(targetGot), "uid:") {
+		t.Fatal("processDirectory() should skip symlink entries and not modify symlink target")
+	}
+}
+
 func testProcessDirectoryAggregatesErrors(t *testing.T) {
 	t.Helper()
 
@@ -231,6 +297,10 @@ func testProcessDirectoryAggregatesErrors(t *testing.T) {
 func TestProcessDirectory(t *testing.T) {
 	t.Run("processes markdown and skips non-markdown", func(t *testing.T) {
 		testProcessDirectoryProcessesMarkdown(t)
+	})
+
+	t.Run("skips symlink entries", func(t *testing.T) {
+		testProcessDirectorySkipsSymlinkEntries(t)
 	})
 
 	t.Run("aggregates processing errors", func(t *testing.T) {
@@ -265,8 +335,8 @@ func TestProcessFile(t *testing.T) {
 		if err == nil {
 			t.Fatal("processFile() expected read error")
 		}
-		if !strings.Contains(err.Error(), "failed to read file") {
-			t.Fatalf("processFile() error = %v, want read error", err)
+		if !strings.Contains(err.Error(), "failed to stat file") {
+			t.Fatalf("processFile() error = %v, want stat error", err)
 		}
 	})
 }
