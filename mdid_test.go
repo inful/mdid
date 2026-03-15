@@ -411,8 +411,8 @@ func testProcessFileErrors(t *testing.T, tmpDir string) {
 		if err == nil {
 			t.Error("ProcessFile() expected error for nonexistent file")
 		}
-		if !strings.Contains(err.Error(), "failed to read file") {
-			t.Errorf("ProcessFile() error = %v, want 'failed to read file' error", err)
+		if !strings.Contains(err.Error(), "failed to stat file") {
+			t.Errorf("ProcessFile() error = %v, want 'failed to stat file' error", err)
 		}
 	})
 

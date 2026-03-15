@@ -9,7 +9,8 @@ overwritten, making it a stable identifier for the document.
 
 - **Pure Go library** — Single external dependency (`github.com/google/uuid`) for UUID generation
 - **Stable identifiers** — Adds a `uid` only when missing; never overwrites an existing one
-- **UUID v7** — Time-sortable identifiers whose timestamp reflects the file's last modification time
+- **UUID v7** — Time-sortable identifiers
+- **Timestamp strategy** — `ProcessFile` uses file `mtime`; `ProcessContent` uses current time unless `ProcessContentAtTime` is used
 - **Automatic frontmatter management** — Creates frontmatter if the file has none
 - **Command-line tool** — Easy-to-use CLI for processing files and directories
 - **Recursive processing** — Process entire directory trees
@@ -50,7 +51,7 @@ If the file has no frontmatter or is missing a `uid`, this will add one:
 
 ```markdown
 ---
-uid: 550e8400-e29b-41d4-a716-446655440000
+uid: 018f1f10-6d3b-7c7f-8a3d-3f9f2e5b8c41
 title: My Document
 ---
 

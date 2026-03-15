@@ -180,20 +180,21 @@ func ProcessContentAtTime(content string, t time.Time) (string, error) {
 func ProcessFile(filepath string) error {
 	info, err := os.Stat(filepath)
 	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
+		return fmt.Errorf("failed to stat file: %w", err)
 	}
 
 	content, err := os.ReadFile(filepath) //nolint:gosec
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
+	original := string(content)
 
-	processed, err := ProcessContentAtTime(string(content), info.ModTime())
+	processed, err := ProcessContentAtTime(original, info.ModTime())
 	if err != nil {
 		return fmt.Errorf("failed to process content: %w", err)
 	}
 
-	if processed == string(content) {
+	if processed == original {
 		return nil
 	}
 

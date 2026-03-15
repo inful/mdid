@@ -92,17 +92,18 @@ func processStdin() error {
 	if err != nil {
 		return fmt.Errorf("failed to read from stdin: %w", err)
 	}
+	original := string(content)
 
-	processed, err := mdid.ProcessContent(string(content))
+	processed, err := mdid.ProcessContent(original)
 	if err != nil {
 		return fmt.Errorf("failed to process content: %w", err)
 	}
 
 	if verboseMode {
-		if processed == string(content) {
-			fmt.Fprintf(os.Stderr, "\u2713 stdin: uid already present\n")
+		if processed == original {
+			fmt.Fprintf(os.Stderr, "[ok] stdin: uid already present\n")
 		} else {
-			fmt.Fprintf(os.Stderr, "\u2713 stdin: uid added\n")
+			fmt.Fprintf(os.Stderr, "[ok] stdin: uid added\n")
 		}
 	}
 
@@ -141,15 +142,16 @@ func processFile(path string) error {
 	if err != nil {
 		return fmt.Errorf("failed to read file: %w", err)
 	}
+	original := string(content)
 
-	processed, err := mdid.ProcessContent(string(content))
+	processed, err := mdid.ProcessContent(original)
 	if err != nil {
 		return fmt.Errorf("failed to process %s: %w", path, err)
 	}
 
-	if processed == string(content) {
+	if processed == original {
 		if verboseMode {
-			fmt.Fprintf(os.Stderr, "\u2713 %s: uid already present\n", path)
+			fmt.Fprintf(os.Stderr, "[ok] %s: uid already present\n", path)
 		}
 		return nil
 	}
@@ -159,7 +161,7 @@ func processFile(path string) error {
 	}
 
 	if verboseMode {
-		fmt.Fprintf(os.Stderr, "\u2713 %s: uid added\n", path)
+		fmt.Fprintf(os.Stderr, "[ok] %s: uid added\n", path)
 	}
 
 	return nil
