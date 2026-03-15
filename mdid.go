@@ -149,14 +149,23 @@ func ProcessContentAtTime(content string, t time.Time) (string, error) {
 	}
 
 	uid := GenerateUIDAtTime(t)
-	frontmatter = AddUIDToFrontmatter(frontmatter, uid)
+	frontmatter = strings.TrimRight(frontmatter, "\n")
 
 	var b strings.Builder
-	b.Grow(len(FrontmatterDelimiter)*2 + len(frontmatter) + len(body) + growthOverhead)
+	b.Grow(len(FrontmatterDelimiter)*2 + len(frontmatter) + len(body) + len(UIDField) + len(uid) + growthOverhead)
 
 	b.WriteString(FrontmatterDelimiter)
 	b.WriteString("\n")
-	b.WriteString(frontmatter)
+	b.WriteString(UIDField)
+	b.WriteString(": ")
+	b.WriteString(uid)
+	b.WriteString("\n")
+
+	if frontmatter != "" {
+		b.WriteString(frontmatter)
+		b.WriteString("\n")
+	}
+
 	b.WriteString(FrontmatterDelimiter)
 	b.WriteString("\n")
 	b.WriteString(body)
