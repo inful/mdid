@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1773536517319,
+  "lastUpdate": 1773536534812,
   "repoUrl": "https://github.com/inful/mdid",
   "entries": {
     "mdid Go Benchmarks": [
@@ -360,6 +360,126 @@ window.BENCHMARK_DATA = {
             "value": 0,
             "unit": "allocs/op",
             "extra": "11618901 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "email": "73816+inful@users.noreply.github.com",
+            "name": "Jone Marius Vignes",
+            "username": "inful"
+          },
+          "committer": {
+            "email": "noreply@github.com",
+            "name": "GitHub",
+            "username": "web-flow"
+          },
+          "distinct": true,
+          "id": "2d8cf62bfffc3cb0629a0ef9946f19463db45d5c",
+          "message": "Merge pull request #2 from inful/dependabot/github_actions/actions/cache-5\n\nchore(deps): bump actions/cache from 4 to 5",
+          "timestamp": "2026-03-15T02:01:53+01:00",
+          "tree_id": "5c0601212e55be1ee2dcb222d9c8593f7f60b531",
+          "url": "https://github.com/inful/mdid/commit/2d8cf62bfffc3cb0629a0ef9946f19463db45d5c"
+        },
+        "date": 1773536534568,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkParseMarkdown",
+            "value": 48.92,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "22664589 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParseMarkdown - ns/op",
+            "value": 48.92,
+            "unit": "ns/op",
+            "extra": "22664589 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParseMarkdown - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "22664589 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkParseMarkdown - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "22664589 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateUID",
+            "value": 215,
+            "unit": "ns/op\t      64 B/op\t       2 allocs/op",
+            "extra": "5561776 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateUID - ns/op",
+            "value": 215,
+            "unit": "ns/op",
+            "extra": "5561776 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateUID - B/op",
+            "value": 64,
+            "unit": "B/op",
+            "extra": "5561776 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateUID - allocs/op",
+            "value": 2,
+            "unit": "allocs/op",
+            "extra": "5561776 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentAddUID",
+            "value": 410.2,
+            "unit": "ns/op\t     240 B/op\t       3 allocs/op",
+            "extra": "2928088 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentAddUID - ns/op",
+            "value": 410.2,
+            "unit": "ns/op",
+            "extra": "2928088 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentAddUID - B/op",
+            "value": 240,
+            "unit": "B/op",
+            "extra": "2928088 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentAddUID - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "2928088 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentExistingUID",
+            "value": 120.2,
+            "unit": "ns/op\t       0 B/op\t       0 allocs/op",
+            "extra": "9861258 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentExistingUID - ns/op",
+            "value": 120.2,
+            "unit": "ns/op",
+            "extra": "9861258 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentExistingUID - B/op",
+            "value": 0,
+            "unit": "B/op",
+            "extra": "9861258 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentExistingUID - allocs/op",
+            "value": 0,
+            "unit": "allocs/op",
+            "extra": "9861258 times\n4 procs"
           }
         ]
       }
