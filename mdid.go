@@ -14,6 +14,13 @@ import (
 // UIDField is the field name used in frontmatter for the unique identifier.
 const UIDField = "uid"
 
+// FrontmatterDocument is the minimal interface required to add a uid to a
+// document's frontmatter. *mdfm.Document satisfies this interface.
+type FrontmatterDocument interface {
+	Has(key string) (bool, error)
+	SetString(key, value string) error
+}
+
 // UUID v7 byte layout constants (RFC 9562, Section 5.7).
 const (
 	uuidVersionByte = 6
@@ -49,6 +56,28 @@ func GenerateUIDAtTime(t time.Time) string {
 	u[uuidVersionByte] = (u[uuidVersionByte] & uuidVersionMask) | uuidVersion7
 	u[uuidVariantByte] = (u[uuidVariantByte] & uuidVariantMask) | uuidVariantRFC
 	return u.String()
+}
+
+// ProcessDocument adds a uid to doc's frontmatter if one is not already
+// present, using the current time as the UUID v7 timestamp. The document is
+// mutated in place.
+func ProcessDocument(doc FrontmatterDocument) error {
+	return ProcessDocumentAtTime(doc, time.Now())
+}
+
+// ProcessDocumentAtTime adds a uid to doc's frontmatter if one is not already
+// present, embedding t as the UUID v7 timestamp. The document is mutated
+// in place.
+func ProcessDocumentAtTime(doc FrontmatterDocument, t time.Time) error {
+	hasUID, err := doc.Has(UIDField)
+	if err != nil {
+		return err
+	}
+	if hasUID {
+		return nil
+	}
+
+	return doc.SetString(UIDField, GenerateUIDAtTime(t))
 }
 
 // ProcessContent adds a uid to the frontmatter if one is not already present,

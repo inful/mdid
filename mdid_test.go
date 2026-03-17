@@ -1,6 +1,7 @@
 package mdid
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -170,6 +171,100 @@ func TestProcessContentAtTime(t *testing.T) {
 		}
 		if got != input {
 			t.Error("ProcessContentAtTime() modified content that already had a uid")
+		}
+	})
+}
+
+// stubDoc is a minimal FrontmatterDocument for testing ProcessDocument.
+type stubDoc struct {
+	fields map[string]string
+	hasErr error
+	setErr error
+}
+
+func (s *stubDoc) Has(key string) (bool, error) {
+	if s.hasErr != nil {
+		return false, s.hasErr
+	}
+	_, ok := s.fields[key]
+	return ok, nil
+}
+
+func (s *stubDoc) SetString(key, value string) error {
+	if s.setErr != nil {
+		return s.setErr
+	}
+	s.fields[key] = value
+	return nil
+}
+
+func TestProcessDocument(t *testing.T) {
+	t.Run("adds uid when missing", func(t *testing.T) {
+		doc := &stubDoc{fields: map[string]string{}}
+		if err := ProcessDocument(doc); err != nil {
+			t.Fatalf("ProcessDocument() error = %v", err)
+		}
+		uid, ok := doc.fields[UIDField]
+		if !ok {
+			t.Fatal("ProcessDocument() did not set uid field")
+		}
+		if !isValidV7UUID(uid) {
+			t.Errorf("ProcessDocument() uid = %q, want valid UUID v7", uid)
+		}
+	})
+
+	t.Run("does not overwrite existing uid", func(t *testing.T) {
+		const existingUID = "11111111-1111-4111-8111-111111111111"
+		doc := &stubDoc{fields: map[string]string{UIDField: existingUID}}
+		if err := ProcessDocument(doc); err != nil {
+			t.Fatalf("ProcessDocument() error = %v", err)
+		}
+		if doc.fields[UIDField] != existingUID {
+			t.Errorf("ProcessDocument() overwrote existing uid")
+		}
+	})
+
+	t.Run("propagates Has error", func(t *testing.T) {
+		doc := &stubDoc{fields: map[string]string{}, hasErr: errors.New("has error")}
+		if err := ProcessDocument(doc); err == nil {
+			t.Fatal("ProcessDocument() expected error from Has")
+		}
+	})
+
+	t.Run("propagates SetString error", func(t *testing.T) {
+		doc := &stubDoc{fields: map[string]string{}, setErr: errors.New("set error")}
+		if err := ProcessDocument(doc); err == nil {
+			t.Fatal("ProcessDocument() expected error from SetString")
+		}
+	})
+}
+
+func TestProcessDocumentAtTime(t *testing.T) {
+	t.Run("embeds provided timestamp in uid", func(t *testing.T) {
+		knownTime := time.Date(2024, 3, 10, 8, 0, 0, 0, time.UTC)
+		doc := &stubDoc{fields: map[string]string{}}
+		if err := ProcessDocumentAtTime(doc, knownTime); err != nil {
+			t.Fatalf("ProcessDocumentAtTime() error = %v", err)
+		}
+		uid := doc.fields[UIDField]
+		ts, err := parseV7Timestamp(uid)
+		if err != nil {
+			t.Fatalf("parseV7Timestamp() error = %v", err)
+		}
+		want := knownTime.Truncate(time.Millisecond).UTC()
+		if !ts.Equal(want) {
+			t.Errorf("uid timestamp = %v, want %v", ts, want)
+		}
+	})
+
+	t.Run("does not overwrite existing uid", func(t *testing.T) {
+		const existingUID = "11111111-1111-4111-8111-111111111111"
+		doc := &stubDoc{fields: map[string]string{UIDField: existingUID}}
+		if err := ProcessDocumentAtTime(doc, time.Now()); err != nil {
+			t.Fatalf("ProcessDocumentAtTime() error = %v", err)
+		}
+		if doc.fields[UIDField] != existingUID {
+			t.Errorf("ProcessDocumentAtTime() overwrote existing uid")
 		}
 	})
 }

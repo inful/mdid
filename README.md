@@ -146,6 +146,31 @@ Processes markdown content using an explicit timestamp for the UUID v7. Useful w
 have a known reference time for the content (e.g. the mtime of the originating file).
 Returns the content unchanged if a `uid` is already present.
 
+#### `ProcessDocument(doc FrontmatterDocument) error`
+
+Adds a `uid` to an already-parsed `*mdfm.Document` (or any type satisfying
+`FrontmatterDocument`) if one is not present. Mutates the document in place;
+the caller serializes when ready. Uses the current time as the UUID v7 timestamp.
+
+#### `ProcessDocumentAtTime(doc FrontmatterDocument, t time.Time) error`
+
+Same as `ProcessDocument`, but uses an explicit timestamp for the UUID v7.
+
+#### `FrontmatterDocument` interface
+
+The minimal interface satisfied by `*mdfm.Document`:
+
+```go
+type FrontmatterDocument interface {
+    Has(key string) (bool, error)
+    SetString(key, value string) error
+}
+```
+
+Any type implementing these two methods can be passed to `ProcessDocument` and
+`ProcessDocumentAtTime`, so callers that already hold a parsed document avoid a
+second parse.
+
 #### `GenerateUID() string`
 
 Returns a new UUID v7 string timestamped at the current time.

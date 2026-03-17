@@ -12,7 +12,7 @@ import (
 	"github.com/inful/mdid"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 const filePermissions = 0o600
 
