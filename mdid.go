@@ -3,23 +3,16 @@
 package mdid
 
 import (
-	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/inful/mdfm"
 )
-
-// FrontmatterDelimiter is the delimiter used for YAML frontmatter.
-const FrontmatterDelimiter = "---"
 
 // UIDField is the field name used in frontmatter for the unique identifier.
 const UIDField = "uid"
-
-const growthOverhead = 4
 
 // UUID v7 byte layout constants (RFC 9562, Section 5.7).
 const (
@@ -35,29 +28,6 @@ const (
 	msShift16       = 16
 	msShift8        = 8
 )
-
-// ParseMarkdown extracts the frontmatter and body from a markdown file.
-func ParseMarkdown(content string) (frontmatter string, body string, err error) {
-	if !strings.HasPrefix(content, FrontmatterDelimiter+"\n") {
-		return "", content, nil
-	}
-
-	rest := content[len(FrontmatterDelimiter)+1:]
-
-	if strings.HasPrefix(rest, FrontmatterDelimiter+"\n") {
-		body = rest[len(FrontmatterDelimiter)+1:]
-		return "", body, nil
-	}
-
-	idx := strings.Index(rest, "\n"+FrontmatterDelimiter+"\n")
-	if idx == -1 {
-		return "", "", errors.New("unclosed frontmatter block")
-	}
-
-	frontmatter = rest[:idx]
-	body = rest[idx+len(FrontmatterDelimiter)+2:]
-	return frontmatter, body, nil
-}
 
 // GenerateUID returns a new UUID v7 using the current time as the timestamp.
 func GenerateUID() string {
@@ -81,51 +51,6 @@ func GenerateUIDAtTime(t time.Time) string {
 	return u.String()
 }
 
-// HasUID reports whether the frontmatter already contains a uid field.
-func HasUID(frontmatter string) bool {
-	if frontmatter == "" {
-		return false
-	}
-	return strings.HasPrefix(frontmatter, UIDField+":") ||
-		strings.Contains(frontmatter, "\n"+UIDField+":")
-}
-
-// GetUID extracts the uid value from the frontmatter.
-// It returns an empty string if no uid field is present.
-func GetUID(frontmatter string) string {
-	const splitParts = 2
-	for line := range strings.SplitSeq(frontmatter, "\n") {
-		if strings.HasPrefix(line, UIDField+":") {
-			parts := strings.SplitN(line, ":", splitParts)
-			if len(parts) == splitParts {
-				return strings.TrimSpace(parts[1])
-			}
-		}
-	}
-	return ""
-}
-
-// AddUIDToFrontmatter prepends a uid field to the frontmatter.
-// The uid is placed at the top so it is easy to find.
-func AddUIDToFrontmatter(frontmatter, uid string) string {
-	frontmatter = strings.TrimRight(frontmatter, "\n")
-
-	var b strings.Builder
-	b.Grow(len(UIDField) + len(uid) + len(frontmatter) + growthOverhead)
-
-	b.WriteString(UIDField)
-	b.WriteString(": ")
-	b.WriteString(uid)
-	b.WriteString("\n")
-
-	if frontmatter != "" {
-		b.WriteString(frontmatter)
-		b.WriteString("\n")
-	}
-
-	return b.String()
-}
-
 // ProcessContent adds a uid to the frontmatter if one is not already present,
 // using the current time as the UUID v7 timestamp. If a uid already exists, the
 // content is returned unchanged.
@@ -137,38 +62,30 @@ func ProcessContent(content string) (string, error) {
 // present, embedding t as the UUID v7 timestamp. If a uid already exists, the
 // content is returned unchanged.
 func ProcessContentAtTime(content string, t time.Time) (string, error) {
-	frontmatter, body, err := ParseMarkdown(content)
+	doc, err := mdfm.ParseString(content)
 	if err != nil {
 		return "", err
 	}
 
-	if HasUID(frontmatter) {
+	hasUID, err := doc.Has(UIDField)
+	if err != nil {
+		return "", err
+	}
+	if hasUID {
 		return content, nil
 	}
 
 	uid := GenerateUIDAtTime(t)
-	frontmatter = strings.TrimRight(frontmatter, "\n")
-
-	var b strings.Builder
-	b.Grow(len(FrontmatterDelimiter)*2 + len(frontmatter) + len(body) + len(UIDField) + len(uid) + growthOverhead)
-
-	b.WriteString(FrontmatterDelimiter)
-	b.WriteString("\n")
-	b.WriteString(UIDField)
-	b.WriteString(": ")
-	b.WriteString(uid)
-	b.WriteString("\n")
-
-	if frontmatter != "" {
-		b.WriteString(frontmatter)
-		b.WriteString("\n")
+	if err = doc.SetString(UIDField, uid); err != nil {
+		return "", err
 	}
 
-	b.WriteString(FrontmatterDelimiter)
-	b.WriteString("\n")
-	b.WriteString(body)
+	out, err := doc.Bytes()
+	if err != nil {
+		return "", err
+	}
 
-	return b.String(), nil
+	return string(out), nil
 }
 
 // ProcessFile reads a markdown file, adds a uid if missing, and writes it back.
@@ -184,59 +101,20 @@ func ProcessFile(path string) error {
 		return fmt.Errorf("refusing to process symlink: %s", path)
 	}
 
-	content, err := os.ReadFile(path) //nolint:gosec
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
-	}
-	original := string(content)
+	uidTime := info.ModTime()
+	err = mdfm.UpdateFile(path, func(doc *mdfm.Document) error {
+		hasUID, hasErr := doc.Has(UIDField)
+		if hasErr != nil {
+			return hasErr
+		}
+		if hasUID {
+			return nil
+		}
 
-	processed, err := ProcessContentAtTime(original, info.ModTime())
+		return doc.SetString(UIDField, GenerateUIDAtTime(uidTime))
+	})
 	if err != nil {
 		return fmt.Errorf("failed to process content: %w", err)
-	}
-
-	if processed == original {
-		return nil
-	}
-
-	if err = writeFileAtomic(path, []byte(processed), info.Mode().Perm()); err != nil {
-		return fmt.Errorf("failed to write file: %w", err)
-	}
-
-	return nil
-}
-
-func writeFileAtomic(path string, data []byte, perm os.FileMode) (retErr error) {
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	tmp, err := os.CreateTemp(dir, "."+base+".mdid-*")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if retErr != nil {
-			_ = os.Remove(tmp.Name())
-		}
-	}()
-
-	if _, err = tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-
-	if err = os.Rename(tmp.Name(), path); err != nil {
-		return err
 	}
 
 	return nil

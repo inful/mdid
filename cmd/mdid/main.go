@@ -141,74 +141,23 @@ func processDirectory(dir string) error {
 }
 
 func processFile(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return fmt.Errorf("failed to stat file: %w", err)
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("refusing to process symlink: %s", path)
-	}
-
-	content, err := os.ReadFile(path) //nolint:gosec
-	if err != nil {
-		return fmt.Errorf("failed to read file: %w", err)
-	}
-	original := string(content)
-
-	processed, err := mdid.ProcessContent(original)
-	if err != nil {
-		return fmt.Errorf("failed to process %s: %w", path, err)
-	}
-
-	if processed == original {
-		if verboseMode {
-			fmt.Fprintf(os.Stderr, "[ok] %s: uid already present\n", path)
+	var hadUID bool
+	if verboseMode {
+		if content, err := os.ReadFile(path); err == nil { //nolint:gosec
+			hadUID = strings.Contains(string(content), "uid:")
 		}
-		return nil
 	}
 
-	if err = writeFileAtomic(path, []byte(processed), info.Mode().Perm()); err != nil {
-		return fmt.Errorf("failed to write %s: %w", path, err)
+	if err := mdid.ProcessFile(path); err != nil {
+		return err
 	}
 
 	if verboseMode {
-		fmt.Fprintf(os.Stderr, "[ok] %s: uid added\n", path)
-	}
-
-	return nil
-}
-
-func writeFileAtomic(path string, data []byte, perm os.FileMode) (retErr error) {
-	dir := filepath.Dir(path)
-	base := filepath.Base(path)
-	tmp, err := os.CreateTemp(dir, "."+base+".mdid-*")
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if retErr != nil {
-			_ = os.Remove(tmp.Name())
+		if hadUID {
+			fmt.Fprintf(os.Stderr, "[ok] %s: uid already present\n", path)
+		} else {
+			fmt.Fprintf(os.Stderr, "[ok] %s: uid added\n", path)
 		}
-	}()
-
-	if _, err = tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Chmod(perm); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err = tmp.Close(); err != nil {
-		return err
-	}
-
-	if err = os.Rename(tmp.Name(), path); err != nil {
-		return err
 	}
 
 	return nil

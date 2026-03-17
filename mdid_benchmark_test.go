@@ -31,17 +31,6 @@ tags:
 This is benchmark content for mdid.
 `
 
-func BenchmarkParseMarkdown(b *testing.B) {
-	b.ReportAllocs()
-
-	for b.Loop() {
-		_, _, err := ParseMarkdown(benchmarkContentWithoutUID)
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
 func BenchmarkGenerateUID(b *testing.B) {
 	b.ReportAllocs()
 
@@ -127,20 +116,6 @@ func BenchmarkProcessFileSymlinkRejected(b *testing.B) {
 	for b.Loop() {
 		if err := ProcessFile(link); err == nil {
 			b.Fatal("ProcessFile() expected symlink rejection error")
-		}
-	}
-}
-
-func BenchmarkWriteFileAtomic(b *testing.B) {
-	b.ReportAllocs()
-
-	dir := b.TempDir()
-	path := filepath.Join(dir, "atomic.md")
-	data := []byte(benchmarkContentWithoutUID)
-
-	for b.Loop() {
-		if err := writeFileAtomic(path, data, 0o600); err != nil {
-			b.Fatal(err)
 		}
 	}
 }

@@ -7,7 +7,7 @@ overwritten, making it a stable identifier for the document.
 
 ## Features
 
-- **Pure Go library** — Single external dependency (`github.com/google/uuid`) for UUID generation
+- **Pure Go library** — Uses `github.com/google/uuid` for UUID generation and `github.com/inful/mdfm` for frontmatter parsing/mutation
 - **Stable identifiers** — Adds a `uid` only when missing; never overwrites an existing one
 - **UUID v7** — Time-sortable identifiers
 - **Timestamp strategy** — `ProcessFile` uses file `mtime`; `ProcessContent` uses current time unless `ProcessContentAtTime` is used
@@ -100,7 +100,6 @@ mdid -h
 package main
 
 import (
-    "fmt"
     "log"
 
     "github.com/inful/mdid"
@@ -123,16 +122,7 @@ title: Test
     if err != nil {
         log.Fatal(err)
     }
-    fmt.Println(processed)
-
-    // Check if content already has a uid
-    frontmatter, _, _ := mdid.ParseMarkdown(processed)
-    fmt.Printf("Has uid: %v\n", mdid.HasUID(frontmatter))
-    fmt.Printf("UID: %s\n", mdid.GetUID(frontmatter))
-
-    // Generate a standalone uid
-    uid := mdid.GenerateUID()
-    fmt.Printf("New uid: %s\n", uid)
+    _ = processed
 }
 ```
 
@@ -156,14 +146,6 @@ Processes markdown content using an explicit timestamp for the UUID v7. Useful w
 have a known reference time for the content (e.g. the mtime of the originating file).
 Returns the content unchanged if a `uid` is already present.
 
-#### `HasUID(frontmatter string) bool`
-
-Reports whether the given frontmatter string contains a `uid` field.
-
-#### `GetUID(frontmatter string) string`
-
-Extracts the `uid` value from the frontmatter. Returns an empty string if not present.
-
 #### `GenerateUID() string`
 
 Returns a new UUID v7 string timestamped at the current time.
@@ -173,20 +155,12 @@ Returns a new UUID v7 string timestamped at the current time.
 Returns a UUID v7 string with the given time embedded as the millisecond-precision
 timestamp (RFC 9562, §5.7). The remaining bits are cryptographically random.
 
-#### `AddUIDToFrontmatter(frontmatter, uid string) string`
-
-Prepends a `uid` field to the given frontmatter string.
-
-#### `ParseMarkdown(content string) (frontmatter string, body string, err error)`
-
-Extracts frontmatter and body from markdown content.
-
 ## How It Works
 
 1. **Parse** — Extracts YAML frontmatter (between `---` delimiters) from the markdown file
 2. **Check** — Looks for an existing `uid` field in the frontmatter
 3. **Generate** — If no `uid` is found, generates a UUID v7
-4. **Update** — Prepends the `uid` field to the frontmatter
+4. **Update** — Adds a `uid` field to the frontmatter if missing
 5. **Write** — Reconstructs the file with updated frontmatter
 
 The UUID v7 timestamp is sourced from the file's modification time (`mtime`) when
@@ -194,8 +168,8 @@ processing files via `ProcessFile`, so documents are time-sortable by when they 
 last edited regardless of when `mdid` was run. `ProcessContent` uses the current time,
 and `ProcessContentAtTime` accepts an explicit timestamp for full control.
 
-The `uid` is placed at the top of the frontmatter so it is easy to locate. Once set,
-it is never changed, making it a reliable long-term identifier for the document.
+The `uid` is inserted into frontmatter through `mdfm`'s YAML-aware mutation APIs,
+and once set it is never changed, making it a reliable long-term identifier for the document.
 
 ## Development
 

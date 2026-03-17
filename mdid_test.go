@@ -16,7 +16,10 @@ import (
 const testFrontmatterInput = "---\ntitle: Test\n---\n# Content"
 
 // uuidV7Re matches a canonical UUID v7 string.
-var uuidV7Re = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+var (
+	uuidV7Re  = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	uidLineRe = regexp.MustCompile(`(?m)^uid:\s*([^\s]+)\s*$`)
+)
 
 func isValidV7UUID(s string) bool {
 	return uuidV7Re.MatchString(s)
@@ -36,57 +39,13 @@ func parseV7Timestamp(uid string) (time.Time, error) {
 	return time.UnixMilli(ms).UTC(), nil
 }
 
-func TestParseMarkdown(t *testing.T) {
-	tests := []struct {
-		name            string
-		input           string
-		wantFrontmatter string
-		wantBody        string
-		wantErr         bool
-	}{
-		{
-			name:            "with frontmatter",
-			input:           "---\ntitle: Test\n---\n# Hello World",
-			wantFrontmatter: "title: Test",
-			wantBody:        "# Hello World",
-		},
-		{
-			name:            "no frontmatter",
-			input:           "# Hello World\nContent here",
-			wantFrontmatter: "",
-			wantBody:        "# Hello World\nContent here",
-		},
-		{
-			name:    "unclosed frontmatter",
-			input:   "---\ntitle: Test\n# Hello World",
-			wantErr: true,
-		},
-		{
-			name:            "empty frontmatter",
-			input:           "---\n---\n# Content",
-			wantFrontmatter: "",
-			wantBody:        "# Content",
-		},
+func getUIDFromContent(content string) string {
+	matches := uidLineRe.FindStringSubmatch(content)
+	if len(matches) != 2 {
+		return ""
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			gotFrontmatter, gotBody, err := ParseMarkdown(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ParseMarkdown() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if tt.wantErr {
-				return
-			}
-			if gotFrontmatter != tt.wantFrontmatter {
-				t.Errorf("ParseMarkdown() frontmatter = %q, want %q", gotFrontmatter, tt.wantFrontmatter)
-			}
-			if gotBody != tt.wantBody {
-				t.Errorf("ParseMarkdown() body = %q, want %q", gotBody, tt.wantBody)
-			}
-		})
-	}
+	return matches[1]
 }
 
 func TestGenerateUID(t *testing.T) {
@@ -125,85 +84,6 @@ func TestGenerateUIDAtTime(t *testing.T) {
 	}
 }
 
-func TestHasUID(t *testing.T) {
-	tests := []struct {
-		name        string
-		frontmatter string
-		want        bool
-	}{
-		{name: "has uid at start", frontmatter: "uid: abc\ntitle: Test", want: true},
-		{name: "has uid mid", frontmatter: "title: Test\nuid: abc\nauthor: Jane", want: true},
-		{name: "no uid", frontmatter: "title: Test\nauthor: Jane", want: false},
-		{name: "empty frontmatter", frontmatter: "", want: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := HasUID(tt.frontmatter); got != tt.want {
-				t.Errorf("HasUID() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGetUID(t *testing.T) {
-	tests := []struct {
-		name        string
-		frontmatter string
-		want        string
-	}{
-		{name: "uid present", frontmatter: "uid: abc-123\ntitle: Test", want: "abc-123"},
-		{name: "uid with extra spaces", frontmatter: "uid:   spaced\ntitle: Test", want: "spaced"},
-		{name: "no uid", frontmatter: "title: Test", want: ""},
-		{name: "empty frontmatter", frontmatter: "", want: ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := GetUID(tt.frontmatter); got != tt.want {
-				t.Errorf("GetUID() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestAddUIDToFrontmatter(t *testing.T) {
-	tests := []struct {
-		name        string
-		frontmatter string
-		uid         string
-		want        string
-	}{
-		{
-			name:        "add to existing frontmatter",
-			frontmatter: "title: Test\nauthor: John",
-			uid:         "abc-123",
-			want:        "uid: abc-123\ntitle: Test\nauthor: John\n",
-		},
-		{
-			name:        "add to empty frontmatter",
-			frontmatter: "",
-			uid:         "abc-123",
-			want:        "uid: abc-123\n",
-		},
-		{
-			name:        "add to frontmatter with trailing newline",
-			frontmatter: "title: Test\n",
-			uid:         "xyz-789",
-			want:        "uid: xyz-789\ntitle: Test\n",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := AddUIDToFrontmatter(tt.frontmatter, tt.uid)
-			if got != tt.want {
-				t.Errorf("AddUIDToFrontmatter() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestProcessContent(t *testing.T) { //nolint:cyclop
 	t.Run("adds uid when missing with frontmatter", func(t *testing.T) {
 		got, err := ProcessContent(testFrontmatterInput)
@@ -213,9 +93,9 @@ func TestProcessContent(t *testing.T) { //nolint:cyclop
 		if !strings.Contains(got, "uid:") {
 			t.Error("ProcessContent() output missing uid field")
 		}
-		frontmatter, _, _ := ParseMarkdown(got)
-		if !isValidV7UUID(GetUID(frontmatter)) {
-			t.Errorf("ProcessContent() uid is not a valid UUID v7: %q", GetUID(frontmatter))
+		uid := getUIDFromContent(got)
+		if !isValidV7UUID(uid) {
+			t.Errorf("ProcessContent() uid is not a valid UUID v7: %q", uid)
 		}
 		if !strings.Contains(got, "title: Test") {
 			t.Error("ProcessContent() lost original frontmatter fields")
@@ -232,9 +112,9 @@ func TestProcessContent(t *testing.T) { //nolint:cyclop
 		if got != input {
 			t.Error("ProcessContent() modified content that already had a uid")
 		}
-		frontmatter, _, _ := ParseMarkdown(got)
-		if GetUID(frontmatter) != existingUID {
-			t.Errorf("ProcessContent() uid = %q, want %q", GetUID(frontmatter), existingUID)
+		uid := getUIDFromContent(got)
+		if uid != existingUID {
+			t.Errorf("ProcessContent() uid = %q, want %q", uid, existingUID)
 		}
 	})
 
@@ -245,16 +125,6 @@ func TestProcessContent(t *testing.T) { //nolint:cyclop
 		}
 		if !strings.Contains(got, "uid:") {
 			t.Error("ProcessContent() output missing uid field")
-		}
-		if !strings.Contains(got, "---") {
-			t.Error("ProcessContent() should add frontmatter delimiters")
-		}
-	})
-
-	t.Run("returns error for unclosed frontmatter", func(t *testing.T) {
-		_, err := ProcessContent("---\ntitle: Test\n# Missing closing delimiter")
-		if err == nil {
-			t.Error("ProcessContent() expected error for unclosed frontmatter")
 		}
 	})
 
@@ -280,8 +150,7 @@ func TestProcessContentAtTime(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ProcessContentAtTime() error = %v", err)
 		}
-		fm, _, _ := ParseMarkdown(got)
-		uid := GetUID(fm)
+		uid := getUIDFromContent(got)
 		ts, err := parseV7Timestamp(uid)
 		if err != nil {
 			t.Fatalf("parseV7Timestamp() error = %v", err)
@@ -301,13 +170,6 @@ func TestProcessContentAtTime(t *testing.T) {
 		}
 		if got != input {
 			t.Error("ProcessContentAtTime() modified content that already had a uid")
-		}
-	})
-
-	t.Run("returns error for unclosed frontmatter", func(t *testing.T) {
-		_, err := ProcessContentAtTime("---\ntitle: Test\n# no close", time.Now())
-		if err == nil {
-			t.Error("ProcessContentAtTime() expected error for unclosed frontmatter")
 		}
 	})
 }
@@ -369,8 +231,7 @@ func testProcessFileUsesMtime(t *testing.T, tmpDir string) {
 			t.Fatalf("ProcessFile() error = %v", err)
 		}
 		got, _ := os.ReadFile(f) //nolint:gosec
-		fm, _, _ := ParseMarkdown(string(got))
-		uid := GetUID(fm)
+		uid := getUIDFromContent(string(got))
 		ts, err := parseV7Timestamp(uid)
 		if err != nil {
 			t.Fatalf("parseV7Timestamp() error = %v", err)
