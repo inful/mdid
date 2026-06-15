@@ -1,5 +1,5 @@
 window.BENCHMARK_DATA = {
-  "lastUpdate": 1780893513019,
+  "lastUpdate": 1781498389661,
   "repoUrl": "https://github.com/inful/mdid",
   "entries": {
     "mdid Go Benchmarks": [
@@ -3430,6 +3430,196 @@ window.BENCHMARK_DATA = {
             "value": 3,
             "unit": "allocs/op",
             "extra": "7924 times\n4 procs"
+          }
+        ]
+      },
+      {
+        "commit": {
+          "author": {
+            "name": "Jone Marius Vignes",
+            "username": "inful",
+            "email": "inful@users.noreply.github.com"
+          },
+          "committer": {
+            "name": "Jone Marius Vignes",
+            "username": "inful",
+            "email": "inful@users.noreply.github.com"
+          },
+          "id": "b37ec7213e454e4c606d11f7bf3af6bd3738fb32",
+          "message": "feat: add FrontmatterDocument interface and ProcessDocument functions\n\n- Add FrontmatterDocument interface with Has and SetString methods;\n  satisfied structurally by *mdfm.Document with no changes to mdfm\n- Add ProcessDocument and ProcessDocumentAtTime for callers that already\n  hold a parsed document, avoiding a redundant parse round-trip\n- Add stubDoc-based tests covering uid injection, idempotency, and\n  error propagation from Has and SetString\n- Document interface and new functions in README\n- Bump CLI version to 0.2.0",
+          "timestamp": "2026-03-17T22:16:16Z",
+          "url": "https://github.com/inful/mdid/commit/b37ec7213e454e4c606d11f7bf3af6bd3738fb32"
+        },
+        "date": 1781498388852,
+        "tool": "go",
+        "benches": [
+          {
+            "name": "BenchmarkGenerateUID",
+            "value": 185.6,
+            "unit": "ns/op\t      64 B/op\t       2 allocs/op",
+            "extra": "6544095 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateUID - ns/op",
+            "value": 185.6,
+            "unit": "ns/op",
+            "extra": "6544095 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateUID - B/op",
+            "value": 64,
+            "unit": "B/op",
+            "extra": "6544095 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkGenerateUID - allocs/op",
+            "value": 2,
+            "unit": "allocs/op",
+            "extra": "6544095 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentAddUID",
+            "value": 33485,
+            "unit": "ns/op\t   60491 B/op\t     230 allocs/op",
+            "extra": "37009 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentAddUID - ns/op",
+            "value": 33485,
+            "unit": "ns/op",
+            "extra": "37009 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentAddUID - B/op",
+            "value": 60491,
+            "unit": "B/op",
+            "extra": "37009 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentAddUID - allocs/op",
+            "value": 230,
+            "unit": "allocs/op",
+            "extra": "37009 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentExistingUID",
+            "value": 20961,
+            "unit": "ns/op\t   38207 B/op\t     166 allocs/op",
+            "extra": "56590 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentExistingUID - ns/op",
+            "value": 20961,
+            "unit": "ns/op",
+            "extra": "56590 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentExistingUID - B/op",
+            "value": 38207,
+            "unit": "B/op",
+            "extra": "56590 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessContentExistingUID - allocs/op",
+            "value": 166,
+            "unit": "allocs/op",
+            "extra": "56590 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileAddUID",
+            "value": 603607,
+            "unit": "ns/op\t   22268 B/op\t     102 allocs/op",
+            "extra": "2144 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileAddUID - ns/op",
+            "value": 603607,
+            "unit": "ns/op",
+            "extra": "2144 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileAddUID - B/op",
+            "value": 22268,
+            "unit": "B/op",
+            "extra": "2144 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileAddUID - allocs/op",
+            "value": 102,
+            "unit": "allocs/op",
+            "extra": "2144 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileExistingUID",
+            "value": 41965,
+            "unit": "ns/op\t   30758 B/op\t     131 allocs/op",
+            "extra": "29150 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileExistingUID - ns/op",
+            "value": 41965,
+            "unit": "ns/op",
+            "extra": "29150 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileExistingUID - B/op",
+            "value": 30758,
+            "unit": "B/op",
+            "extra": "29150 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileExistingUID - allocs/op",
+            "value": 131,
+            "unit": "allocs/op",
+            "extra": "29150 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileSymlinkRejected",
+            "value": 1063,
+            "unit": "ns/op\t     400 B/op\t       5 allocs/op",
+            "extra": "1000000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileSymlinkRejected - ns/op",
+            "value": 1063,
+            "unit": "ns/op",
+            "extra": "1000000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileSymlinkRejected - B/op",
+            "value": 400,
+            "unit": "B/op",
+            "extra": "1000000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkProcessFileSymlinkRejected - allocs/op",
+            "value": 5,
+            "unit": "allocs/op",
+            "extra": "1000000 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteFileDirect",
+            "value": 173416,
+            "unit": "ns/op\t     168 B/op\t       3 allocs/op",
+            "extra": "6390 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteFileDirect - ns/op",
+            "value": 173416,
+            "unit": "ns/op",
+            "extra": "6390 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteFileDirect - B/op",
+            "value": 168,
+            "unit": "B/op",
+            "extra": "6390 times\n4 procs"
+          },
+          {
+            "name": "BenchmarkWriteFileDirect - allocs/op",
+            "value": 3,
+            "unit": "allocs/op",
+            "extra": "6390 times\n4 procs"
           }
         ]
       }
