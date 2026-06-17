@@ -21,6 +21,31 @@ type FrontmatterDocument interface {
 	SetString(key, value string) error
 }
 
+// frontmatterCodec is the full set of operations mdid performs on a parsed
+// markdown document. *mdfm.Document satisfies this interface; tests can
+// substitute other implementations to exercise error paths without depending
+// on the mdfm library's internal failure modes.
+type frontmatterCodec interface {
+	FrontmatterDocument
+	Bytes() ([]byte, error)
+}
+
+// parseFrontmatter parses markdown content into a document codec. It is a
+// package variable so tests can inject failing implementations; production
+// callers should treat it as opaque.
+var parseFrontmatter = func(content string) (frontmatterCodec, error) {
+	return mdfm.ParseString(content)
+}
+
+// updateFrontmatterFile reads path, applies update, and writes the result
+// back. It is a package variable so tests can inject failing implementations;
+// production callers should treat it as opaque.
+var updateFrontmatterFile = func(path string, update func(frontmatterCodec) error) error {
+	return mdfm.UpdateFile(path, func(doc *mdfm.Document) error {
+		return update(doc)
+	})
+}
+
 // UUID v7 byte layout constants (RFC 9562, Section 5.7).
 const (
 	uuidVersionByte = 6
@@ -44,9 +69,11 @@ func GenerateUID() string {
 // GenerateUIDAtTime returns a new UUID v7 using t as the millisecond-precision
 // timestamp. The embedded timestamp makes UIDs time-sortable while retaining
 // global uniqueness through random bits.
+//
+//nolint:gosec // UUID v7 byte layout per RFC 9562 §5.7; byte casts below are intentional truncation.
 func GenerateUIDAtTime(t time.Time) string {
 	u := uuid.New()             // 16 cryptographically random bytes; panics on CSPRNG failure
-	ms := uint64(t.UnixMilli()) //nolint:gosec // timestamp is always non-negative for modern files
+	ms := uint64(t.UnixMilli()) // timestamp is always non-negative for modern files
 	u[0] = byte(ms >> msShift40)
 	u[1] = byte(ms >> msShift32)
 	u[2] = byte(ms >> msShift24)
@@ -56,6 +83,18 @@ func GenerateUIDAtTime(t time.Time) string {
 	u[uuidVersionByte] = (u[uuidVersionByte] & uuidVersionMask) | uuidVersion7
 	u[uuidVariantByte] = (u[uuidVariantByte] & uuidVariantMask) | uuidVariantRFC
 	return u.String()
+}
+
+// HasUID reports whether the markdown content's frontmatter contains a uid
+// field. It returns false when the content has no frontmatter or the
+// frontmatter has no uid. It returns an error only when the content has
+// malformed YAML frontmatter.
+func HasUID(content string) (bool, error) {
+	doc, err := parseFrontmatter(content)
+	if err != nil {
+		return false, err
+	}
+	return doc.Has(UIDField)
 }
 
 // ProcessDocument adds a uid to doc's frontmatter if one is not already
@@ -91,7 +130,7 @@ func ProcessContent(content string) (string, error) {
 // present, embedding t as the UUID v7 timestamp. If a uid already exists, the
 // content is returned unchanged.
 func ProcessContentAtTime(content string, t time.Time) (string, error) {
-	doc, err := mdfm.ParseString(content)
+	doc, err := parseFrontmatter(content)
 	if err != nil {
 		return "", err
 	}
@@ -104,8 +143,7 @@ func ProcessContentAtTime(content string, t time.Time) (string, error) {
 		return content, nil
 	}
 
-	uid := GenerateUIDAtTime(t)
-	if err = doc.SetString(UIDField, uid); err != nil {
+	if err = doc.SetString(UIDField, GenerateUIDAtTime(t)); err != nil {
 		return "", err
 	}
 
@@ -131,7 +169,7 @@ func ProcessFile(path string) error {
 	}
 
 	uidTime := info.ModTime()
-	err = mdfm.UpdateFile(path, func(doc *mdfm.Document) error {
+	err = updateFrontmatterFile(path, func(doc frontmatterCodec) error {
 		hasUID, hasErr := doc.Has(UIDField)
 		if hasErr != nil {
 			return hasErr

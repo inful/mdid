@@ -12,7 +12,7 @@ import (
 	"github.com/inful/mdid"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 const filePermissions = 0o600
 
@@ -144,7 +144,12 @@ func processFile(path string) error {
 	var hadUID bool
 	if verboseMode {
 		if content, err := os.ReadFile(path); err == nil { //nolint:gosec
-			hadUID = strings.Contains(string(content), "uid:")
+			// Use the library's parser rather than a substring grep so a "uid:"
+			// in the body of the document (e.g. inside a code fence) cannot
+			// fool the verbose output.
+			if has, hasErr := mdid.HasUID(string(content)); hasErr == nil {
+				hadUID = has
+			}
 		}
 	}
 

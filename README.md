@@ -140,6 +140,14 @@ already contains a `uid`, it is left untouched.
 Processes markdown content and returns it with a `uid` added to the frontmatter.
 Returns the content unchanged if a `uid` is already present.
 
+#### `HasUID(content string) (bool, error)`
+
+Reports whether the markdown content's frontmatter contains a `uid` field.
+Returns `false` for content with no frontmatter or no `uid`. Returns an error
+only for malformed YAML frontmatter. Useful when callers want to inspect a
+document without mutating it (and as the canonical "is this a known document?"
+check before any batch processing).
+
 #### `ProcessContentAtTime(content string, t time.Time) (string, error)`
 
 Processes markdown content using an explicit timestamp for the UUID v7. Useful when you

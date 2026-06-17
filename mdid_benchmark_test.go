@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const benchmarkContentWithoutUID = `---
@@ -129,6 +130,36 @@ func BenchmarkWriteFileDirect(b *testing.B) {
 
 	for b.Loop() {
 		if err := os.WriteFile(path, data, 0o600); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessDocument(b *testing.B) {
+	b.ReportAllocs()
+
+	for b.Loop() {
+		b.StopTimer()
+		doc := &stubDoc{fields: map[string]string{}}
+		b.StartTimer()
+
+		if err := ProcessDocument(doc); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkProcessDocumentAtTime(b *testing.B) {
+	b.ReportAllocs()
+
+	knownTime := time.Date(2024, 3, 10, 8, 0, 0, 0, time.UTC)
+
+	for b.Loop() {
+		b.StopTimer()
+		doc := &stubDoc{fields: map[string]string{}}
+		b.StartTimer()
+
+		if err := ProcessDocumentAtTime(doc, knownTime); err != nil {
 			b.Fatal(err)
 		}
 	}

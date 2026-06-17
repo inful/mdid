@@ -413,3 +413,204 @@ func TestProcessFile(t *testing.T) {
 	testProcessFilePreservesExisting(t, tmpDir)
 	testProcessFileErrors(t, tmpDir)
 }
+
+// stubCodec is a minimal frontmatterCodec for testing error paths that the
+// mdfm library does not surface in normal operation.
+type stubCodec struct {
+	fields   map[string]string
+	hasErr   error
+	setErr   error
+	bytesErr error
+	bytesOut []byte
+}
+
+func (s *stubCodec) Has(key string) (bool, error) {
+	if s.hasErr != nil {
+		return false, s.hasErr
+	}
+	_, ok := s.fields[key]
+	return ok, nil
+}
+
+func (s *stubCodec) SetString(key, value string) error {
+	if s.setErr != nil {
+		return s.setErr
+	}
+	s.fields[key] = value
+	return nil
+}
+
+func (s *stubCodec) Bytes() ([]byte, error) {
+	if s.bytesErr != nil {
+		return nil, s.bytesErr
+	}
+	return s.bytesOut, nil
+}
+
+// withParseFrontmatter swaps parseFrontmatter for the duration of t and
+// restores the original on cleanup.
+func withParseFrontmatter(t *testing.T, fn func(string) (frontmatterCodec, error)) {
+	t.Helper()
+	orig := parseFrontmatter
+	t.Cleanup(func() { parseFrontmatter = orig })
+	parseFrontmatter = fn
+}
+
+// withUpdateFrontmatterFile swaps updateFrontmatterFile for the duration of t
+// and restores the original on cleanup.
+func withUpdateFrontmatterFile(t *testing.T, fn func(string, func(frontmatterCodec) error) error) {
+	t.Helper()
+	orig := updateFrontmatterFile
+	t.Cleanup(func() { updateFrontmatterFile = orig })
+	updateFrontmatterFile = fn
+}
+
+func TestHasUID(t *testing.T) {
+	t.Run("returns true when uid is present", func(t *testing.T) {
+		const existingUID = "11111111-1111-4111-8111-111111111111"
+		input := "---\nuid: " + existingUID + "\ntitle: Test\n---\n# Content"
+		has, err := HasUID(input)
+		if err != nil {
+			t.Fatalf("HasUID() error = %v", err)
+		}
+		if !has {
+			t.Error("HasUID() = false, want true for content with uid")
+		}
+	})
+
+	t.Run("returns false when no uid", func(t *testing.T) {
+		has, err := HasUID(testFrontmatterInput)
+		if err != nil {
+			t.Fatalf("HasUID() error = %v", err)
+		}
+		if has {
+			t.Error("HasUID() = true, want false for content without uid")
+		}
+	})
+
+	t.Run("returns false when no frontmatter", func(t *testing.T) {
+		has, err := HasUID("# Just content, no frontmatter")
+		if err != nil {
+			t.Fatalf("HasUID() error = %v", err)
+		}
+		if has {
+			t.Error("HasUID() = true, want false for content without frontmatter")
+		}
+	})
+
+	t.Run("returns error for malformed frontmatter", func(t *testing.T) {
+		_, err := HasUID("---\ntitle: Test\n# Missing closing delimiter")
+		if err == nil {
+			t.Error("HasUID() expected error for malformed frontmatter")
+		}
+	})
+
+	t.Run("propagates parse error", func(t *testing.T) {
+		errParse := errors.New("parse fail")
+		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
+			return nil, errParse
+		})
+		_, err := HasUID(testFrontmatterInput)
+		if !errors.Is(err, errParse) {
+			t.Errorf("HasUID() error = %v, want %v", err, errParse)
+		}
+	})
+
+	t.Run("propagates Has error", func(t *testing.T) {
+		errHas := errors.New("has fail")
+		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
+			return &stubCodec{hasErr: errHas}, nil
+		})
+		_, err := HasUID(testFrontmatterInput)
+		if !errors.Is(err, errHas) {
+			t.Errorf("HasUID() error = %v, want %v", err, errHas)
+		}
+	})
+}
+
+func TestProcessContentAtTimeErrorPaths(t *testing.T) {
+	t.Run("propagates parse error", func(t *testing.T) {
+		errParse := errors.New("parse fail")
+		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
+			return nil, errParse
+		})
+		_, err := ProcessContentAtTime(testFrontmatterInput, time.Now())
+		if !errors.Is(err, errParse) {
+			t.Errorf("ProcessContentAtTime() error = %v, want %v", err, errParse)
+		}
+	})
+
+	t.Run("propagates Has error", func(t *testing.T) {
+		errHas := errors.New("has fail")
+		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
+			return &stubCodec{hasErr: errHas}, nil
+		})
+		_, err := ProcessContentAtTime(testFrontmatterInput, time.Now())
+		if !errors.Is(err, errHas) {
+			t.Errorf("ProcessContentAtTime() error = %v, want %v", err, errHas)
+		}
+	})
+
+	t.Run("propagates SetString error", func(t *testing.T) {
+		errSet := errors.New("set fail")
+		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
+			return &stubCodec{fields: map[string]string{}, setErr: errSet}, nil
+		})
+		_, err := ProcessContentAtTime(testFrontmatterInput, time.Now())
+		if !errors.Is(err, errSet) {
+			t.Errorf("ProcessContentAtTime() error = %v, want %v", err, errSet)
+		}
+	})
+
+	t.Run("propagates Bytes error", func(t *testing.T) {
+		errBytes := errors.New("bytes fail")
+		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
+			return &stubCodec{fields: map[string]string{}, bytesErr: errBytes}, nil
+		})
+		_, err := ProcessContentAtTime(testFrontmatterInput, time.Now())
+		if !errors.Is(err, errBytes) {
+			t.Errorf("ProcessContentAtTime() error = %v, want %v", err, errBytes)
+		}
+	})
+}
+
+func TestProcessFileErrorPaths(t *testing.T) {
+	// writeRealFile creates a real file so the Lstat check in ProcessFile passes
+	// before the injected updateFrontmatterFile is invoked.
+	writeRealFile := func(t *testing.T) string {
+		t.Helper()
+		f := filepath.Join(t.TempDir(), "test.md")
+		if err := os.WriteFile(f, []byte("# test"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return f
+	}
+
+	t.Run("propagates Has error in callback", func(t *testing.T) {
+		errHas := errors.New("has fail")
+		withUpdateFrontmatterFile(t, func(_ string, update func(frontmatterCodec) error) error {
+			return update(&stubCodec{hasErr: errHas})
+		})
+		err := ProcessFile(writeRealFile(t))
+		if err == nil {
+			t.Fatal("ProcessFile() expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "has fail") {
+			t.Errorf("ProcessFile() error = %v, want it to contain 'has fail'", err)
+		}
+	})
+
+	t.Run("propagates SetString error in callback", func(t *testing.T) {
+		errSet := errors.New("set fail")
+		withUpdateFrontmatterFile(t, func(_ string, update func(frontmatterCodec) error) error {
+			return update(&stubCodec{fields: map[string]string{}, setErr: errSet})
+		})
+		err := ProcessFile(writeRealFile(t))
+		if err == nil {
+			t.Fatal("ProcessFile() expected error, got nil")
+		}
+		if !strings.Contains(err.Error(), "set fail") {
+			t.Errorf("ProcessFile() error = %v, want it to contain 'set fail'", err)
+		}
+	})
+}

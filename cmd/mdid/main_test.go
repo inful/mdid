@@ -308,35 +308,79 @@ func TestProcessDirectory(t *testing.T) {
 	})
 }
 
-func TestProcessFile(t *testing.T) {
-	t.Run("verbose reports uid added", func(t *testing.T) {
-		setModes(t, false, true)
-		path := filepath.Join(t.TempDir(), "doc.md")
-		if err := os.WriteFile(path, []byte("# hello"), filePermissions); err != nil {
-			t.Fatal(err)
-		}
+func TestProcessFileVerboseReportsUIDAdded(t *testing.T) {
+	setModes(t, false, true)
+	path := filepath.Join(t.TempDir(), "doc.md")
+	if err := os.WriteFile(path, []byte("# hello"), filePermissions); err != nil {
+		t.Fatal(err)
+	}
 
-		_, stderrPath := captureOutputFiles(t)
-		if err := processFile(path); err != nil {
-			t.Fatalf("processFile() error = %v", err)
-		}
+	_, stderrPath := captureOutputFiles(t)
+	if err := processFile(path); err != nil {
+		t.Fatalf("processFile() error = %v", err)
+	}
 
-		got, err := os.ReadFile(stderrPath) //nolint:gosec
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !strings.Contains(string(got), "uid added") {
-			t.Fatalf("processFile() stderr = %q, want 'uid added'", string(got))
-		}
-	})
+	got, err := os.ReadFile(stderrPath) //nolint:gosec
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "uid added") {
+		t.Fatalf("processFile() stderr = %q, want 'uid added'", string(got))
+	}
+}
 
-	t.Run("returns error for missing file", func(t *testing.T) {
-		err := processFile(filepath.Join(t.TempDir(), "missing.md"))
-		if err == nil {
-			t.Fatal("processFile() expected read error")
-		}
-		if !strings.Contains(err.Error(), "failed to stat file") {
-			t.Fatalf("processFile() error = %v, want stat error", err)
-		}
-	})
+func TestProcessFileVerboseReportsUIDPresent(t *testing.T) {
+	setModes(t, false, true)
+	path := filepath.Join(t.TempDir(), "doc.md")
+	content := "---\nuid: 11111111-1111-4111-8111-111111111111\n---\n# hello"
+	if err := os.WriteFile(path, []byte(content), filePermissions); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderrPath := captureOutputFiles(t)
+	if err := processFile(path); err != nil {
+		t.Fatalf("processFile() error = %v", err)
+	}
+
+	got, err := os.ReadFile(stderrPath) //nolint:gosec
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "uid already present") {
+		t.Fatalf("processFile() stderr = %q, want 'uid already present'", string(got))
+	}
+}
+
+func TestProcessFileVerboseIgnoresUIDInBody(t *testing.T) {
+	// A "uid:" inside a code fence in the body must not fool the verbose
+	// output into thinking the file already has a frontmatter uid.
+	setModes(t, false, true)
+	path := filepath.Join(t.TempDir(), "doc.md")
+	content := "# hello\n\n```\nuid: not-a-real-uid\n```\n"
+	if err := os.WriteFile(path, []byte(content), filePermissions); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderrPath := captureOutputFiles(t)
+	if err := processFile(path); err != nil {
+		t.Fatalf("processFile() error = %v", err)
+	}
+
+	got, err := os.ReadFile(stderrPath) //nolint:gosec
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(got), "uid added") {
+		t.Fatalf("processFile() stderr = %q, want 'uid added'", string(got))
+	}
+}
+
+func TestProcessFileReturnsErrorForMissingFile(t *testing.T) {
+	err := processFile(filepath.Join(t.TempDir(), "missing.md"))
+	if err == nil {
+		t.Fatal("processFile() expected read error")
+	}
+	if !strings.Contains(err.Error(), "failed to stat file") {
+		t.Fatalf("processFile() error = %v, want stat error", err)
+	}
 }
