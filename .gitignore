@@ -30,3 +30,4 @@ go.work.sum
 # Build artifacts
 /mdid
 dist/
+.tokensave
