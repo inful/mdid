@@ -9,8 +9,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 // testFrontmatterInput is a minimal markdown document used across multiple tests.
@@ -26,17 +24,68 @@ func isValidV7UUID(s string) bool {
 	return uuidV7Re.MatchString(s)
 }
 
+// parseUUIDBytes decodes a canonical 36-char UUID string into its 16 raw
+// bytes. Equivalent to uuid.UUID's slice form but without the dependency.
+func parseUUIDBytes(uid string) ([16]byte, error) {
+	var b [16]byte
+	if !isCanonicalUUID(uid) {
+		return b, errors.New("invalid UUID format")
+	}
+	bi := 0
+	for i := 0; i < 36; i++ {
+		if isDashPos(i) {
+			continue
+		}
+		hi, ok := hexNibble(uid[i])
+		if !ok {
+			return b, fmt.Errorf("invalid hex digit at position %d: %q", i, uid[i])
+		}
+		lo, ok := hexNibble(uid[i+1])
+		if !ok {
+			return b, fmt.Errorf("invalid hex digit at position %d: %q", i+1, uid[i+1])
+		}
+		b[bi] = hi<<4 | lo
+		bi++
+		i++ // skip the second hex digit
+	}
+	return b, nil
+}
+
+func isCanonicalUUID(uid string) bool {
+	if len(uid) != 36 {
+		return false
+	}
+	return uid[8] == '-' && uid[13] == '-' && uid[18] == '-' && uid[23] == '-'
+}
+
+func isDashPos(i int) bool {
+	return i == 8 || i == 13 || i == 18 || i == 23
+}
+
+func hexNibble(c byte) (byte, bool) {
+	switch {
+	case '0' <= c && c <= '9':
+		return c - '0', true
+	case 'a' <= c && c <= 'f':
+		return c - 'a' + 10, true
+	case 'A' <= c && c <= 'F':
+		return c - 'A' + 10, true
+	default:
+		return 0, false
+	}
+}
+
 // parseV7Timestamp extracts the millisecond timestamp embedded in a UUID v7.
 func parseV7Timestamp(uid string) (time.Time, error) {
-	u, err := uuid.Parse(uid)
+	b, err := parseUUIDBytes(uid)
 	if err != nil {
 		return time.Time{}, err
 	}
-	if u.Version() != 7 {
-		return time.Time{}, fmt.Errorf("expected UUID v7, got v%d", u.Version())
+	if b[6]>>4 != 7 {
+		return time.Time{}, fmt.Errorf("expected UUID v7, got v%d", b[6]>>4)
 	}
-	ms := int64(u[0])<<40 | int64(u[1])<<32 | int64(u[2])<<24 |
-		int64(u[3])<<16 | int64(u[4])<<8 | int64(u[5])
+	ms := int64(b[0])<<40 | int64(b[1])<<32 | int64(b[2])<<24 |
+		int64(b[3])<<16 | int64(b[4])<<8 | int64(b[5])
 	return time.UnixMilli(ms).UTC(), nil
 }
 
