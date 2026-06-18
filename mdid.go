@@ -103,10 +103,12 @@ func GenerateUIDAtTime(t time.Time) string {
 // formatUUIDv7 formats a 16-byte UUID into its canonical 36-char hex form
 // (8-4-4-4-12 with dashes). The implementation is hand-rolled to avoid
 // uuid.UUID.String()'s fmt.Sprintf overhead, which formats each 2/4-byte
-// group via reflection. On a hot path this is ~5x faster and halves the
-// allocations compared to the Sprintf-based formatter. The byte slice is
-// constructed in a stack-allocated [36]byte and returned as a string, so
-// the only heap allocation is the resulting 36-byte string itself.
+// group via reflection. On a microbenchmark of the formatting step in
+// isolation the hand-rolled version is several times faster; on the full
+// GenerateUID path the CSPRNG syscall dominates and the end-to-end speedup
+// is in the low double-digit percent range. The byte slice is constructed
+// in a stack-allocated [36]byte and returned as a string, so the only heap
+// allocation is the resulting 36-byte string itself.
 func formatUUIDv7(u [16]byte) string {
 	var b [36]byte
 	b[8] = '-'
