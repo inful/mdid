@@ -92,6 +92,9 @@ Flags may come before or after the paths: `mdid -r docs/ -v` behaves like
 mdid -v -r .
 ```
 
+Each file is read and parsed twice in verbose mode, so `-v` roughly triples the
+time of a run over a tree whose files already have a uid.
+
 #### Pipeline/stdin-stdout usage
 
 ```sh
@@ -110,7 +113,7 @@ or a redirection such as `mdid < /dev/null > output.md` is processed normally.
 
 | Code | Meaning |
 | ---- | ------- |
-| 0 | Everything asked for was processed |
+| 0 | Everything asked for was processed, or deliberately left alone |
 | 1 | At least one file, or the input, could not be processed; the rest still were |
 | 2 | Called with no arguments on a terminal; the usage was printed |
 
@@ -304,7 +307,9 @@ so both refusals can be matched with `errors.Is`.
 
 Because a skipped file keeps whatever uid it has and does not get one of its
 own, exit code 0 means "every markdown file was processed or deliberately left
-alone", not "every file now has a uid".
+alone", not "every file now has a uid". Each skipped file gets a `[skip]` line,
+and a run that skipped any ends with `[skip] N file(s) left unchanged`, which
+is the number to look for in a long log or in CI output.
 
 ## Development
 

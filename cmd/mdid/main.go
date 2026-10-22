@@ -144,7 +144,9 @@ func processPath(path string) error {
 		return fmt.Errorf("'%s' is not a markdown file", path)
 	}
 
-	return processFile(path)
+	_, err = processFile(path)
+
+	return err
 }
 
 // isMarkdown reports whether path has a markdown extension.
@@ -205,6 +207,7 @@ func processStdin() error {
 
 func processDirectory(dir string) error {
 	var errs []string
+	var skipped int
 
 	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -217,13 +220,26 @@ func processDirectory(dir string) error {
 		if d.Type()&os.ModeSymlink != 0 || d.IsDir() || !isMarkdown(path) {
 			return nil
 		}
-		if err := processFile(path); err != nil {
+		leftAlone, err := processFile(path)
+		if err != nil {
 			errs = append(errs, fmt.Sprintf("%s: %v", path, err))
+
+			return nil
 		}
+		if leftAlone {
+			skipped++
+		}
+
 		return nil
 	})
 	if err != nil {
 		errs = append(errs, err.Error())
+	}
+
+	// The per-file [skip] lines scroll away in a long run, so say how many
+	// there were: that is the number a caller needs.
+	if skipped > 0 {
+		fmt.Fprintf(os.Stderr, "[skip] %d file(s) left unchanged\n", skipped)
 	}
 
 	if len(errs) > 0 {
@@ -233,8 +249,16 @@ func processDirectory(dir string) error {
 	return nil
 }
 
-func processFile(path string) error {
+// processFile adds a uid to one file. It reports whether the file was left
+// alone on purpose, which is not a failure.
+func processFile(path string) (bool, error) {
 	var hadUID bool
+	// shortcut: -v reads and parses each file a second time to decide which
+	// message to print, which roughly triples a no-op run over a tree of
+	// 2,000 files. The alternatives are worse: a ProcessFile that reports
+	// whether it wrote is public API growth, and an mtime comparison is wrong
+	// on filesystems with one-second timestamps. Drop this when either is
+	// worth it.
 	if verboseMode {
 		if content, err := os.ReadFile(path); err == nil { //nolint:gosec
 			// Use the library's parser rather than a substring grep so a "uid:"
@@ -251,14 +275,14 @@ func processFile(path string) error {
 		// cannot safely write. Report it, but do not fail the run over it.
 		if errors.Is(err, mdid.ErrMergeKey) {
 			fmt.Fprintf(os.Stderr, "[skip] %s: frontmatter uses a YAML merge key, left unchanged\n", path)
-			return nil
+			return true, nil
 		}
 		if errors.Is(err, mdid.ErrAnchorInUse) {
 			fmt.Fprintf(os.Stderr, "[skip] %s: the uid key defines an anchor another key aliases, left unchanged\n", path)
-			return nil
+			return true, nil
 		}
 
-		return err
+		return false, err
 	}
 
 	if verboseMode {
@@ -269,5 +293,5 @@ func processFile(path string) error {
 		}
 	}
 
-	return nil
+	return false, nil
 }

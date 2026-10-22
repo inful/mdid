@@ -110,8 +110,13 @@ func TestRefusedFilesAreSkipped(t *testing.T) {
 				t.Fatalf("processDirectory() error = %v, want nil for a skipped file", err)
 			}
 
-			if got := readFile(t, stderrPath); !strings.Contains(got, "[skip]") {
+			got := readFile(t, stderrPath)
+			if !strings.Contains(got, "[skip]") {
 				t.Errorf("processDirectory() stderr = %q, want a [skip] line", got)
+			}
+			// The count is the part that survives a long log.
+			if !strings.Contains(got, "[skip] 1 file(s) left unchanged") {
+				t.Errorf("processDirectory() stderr = %q, want the skip total", got)
 			}
 			if got := readFile(t, refused); got != tt.content {
 				t.Error("processDirectory() rewrote a file it refused to change")
@@ -751,8 +756,8 @@ func TestProcessFileVerbose(t *testing.T) {
 			}
 
 			_, stderrPath := captureOutputFiles(t)
-			if err := processFile(path); err != nil {
-				t.Fatalf("processFile() error = %v", err)
+			if leftAlone, err := processFile(path); err != nil || leftAlone {
+				t.Fatalf("processFile() = %v, %v, want false, nil", leftAlone, err)
 			}
 
 			got := readFile(t, stderrPath)
@@ -764,7 +769,7 @@ func TestProcessFileVerbose(t *testing.T) {
 }
 
 func TestProcessFileReturnsErrorForMissingFile(t *testing.T) {
-	err := processFile(filepath.Join(t.TempDir(), "missing.md"))
+	_, err := processFile(filepath.Join(t.TempDir(), "missing.md"))
 	if err == nil {
 		t.Fatal("processFile() expected read error")
 	}
