@@ -78,34 +78,48 @@ const docsDir = "docs"
 // mergeKeyFrontmatter has no uid of its own; the merged keys supply one.
 const mergeKeyFrontmatter = "---\ndefaults: &d\n  uid: 11111111-1111-4111-8111-111111111111\n<<: *d\n---\n# hello\n"
 
+// aliasedAnchorFrontmatter's placeholder uid defines an anchor that another key
+// aliases, so filling it in would produce frontmatter that no longer parses.
+const aliasedAnchorFrontmatter = "---\nuid: &u \"\"\nalias: *u\ntitle: anchored\n---\n# hello\n"
+
 // A file mdid deliberately refuses is not a failure: the run stays green, the
-// file keeps its inherited uid, and the user is told which file was skipped.
-func TestMergeKeyFileIsSkipped(t *testing.T) {
-	setModes(t, true, true)
+// file keeps what it has, and the user is told which file was skipped.
+func TestRefusedFilesAreSkipped(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+	}{
+		{name: "uid inherited through a merge key", content: mergeKeyFrontmatter},
+		{name: "uid anchor still in use", content: aliasedAnchorFrontmatter},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			setModes(t, true, true)
 
-	dir := t.TempDir()
-	merged := filepath.Join(dir, "merged.md")
-	if err := os.WriteFile(merged, []byte(mergeKeyFrontmatter), filePermissions); err != nil {
-		t.Fatal(err)
-	}
-	plain := filepath.Join(dir, "plain.md")
-	if err := os.WriteFile(plain, []byte("# hello"), filePermissions); err != nil {
-		t.Fatal(err)
-	}
+			dir := t.TempDir()
+			refused := filepath.Join(dir, "refused.md")
+			if err := os.WriteFile(refused, []byte(tt.content), filePermissions); err != nil {
+				t.Fatal(err)
+			}
+			plain := filepath.Join(dir, "plain.md")
+			if err := os.WriteFile(plain, []byte("# hello"), filePermissions); err != nil {
+				t.Fatal(err)
+			}
 
-	_, stderrPath := captureOutputFiles(t)
-	if err := processDirectory(dir); err != nil {
-		t.Fatalf("processDirectory() error = %v, want nil for a skipped file", err)
-	}
+			_, stderrPath := captureOutputFiles(t)
+			if err := processDirectory(dir); err != nil {
+				t.Fatalf("processDirectory() error = %v, want nil for a skipped file", err)
+			}
 
-	if got := readFile(t, stderrPath); !strings.Contains(got, "[skip]") {
-		t.Errorf("processDirectory() stderr = %q, want a [skip] line", got)
-	}
-	if got := readFile(t, merged); got != mergeKeyFrontmatter {
-		t.Error("processDirectory() rewrote a file with a merge-keyed uid")
-	}
-	if got := readFile(t, plain); !strings.Contains(got, "uid:") {
-		t.Error("processDirectory() did not process the other files")
+			if got := readFile(t, stderrPath); !strings.Contains(got, "[skip]") {
+				t.Errorf("processDirectory() stderr = %q, want a [skip] line", got)
+			}
+			if got := readFile(t, refused); got != tt.content {
+				t.Error("processDirectory() rewrote a file it refused to change")
+			}
+			if got := readFile(t, plain); !strings.Contains(got, "uid:") {
+				t.Error("processDirectory() did not process the other files")
+			}
+		})
 	}
 }
 

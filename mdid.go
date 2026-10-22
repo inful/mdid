@@ -28,6 +28,11 @@ const mergeKey = "<<"
 // shadow the inherited one.
 var ErrMergeKey = errors.New("frontmatter uses a YAML merge key; cannot tell whether it already has a uid")
 
+// ErrAnchorInUse reports a uid key that defines a YAML anchor which another
+// key still aliases. Filling in the placeholder would leave frontmatter that no
+// longer parses, so the document is left as it is.
+var ErrAnchorInUse = mdfm.ErrAnchorInUse
+
 // FrontmatterDocument is the minimal interface required to add a uid to a
 // document's frontmatter. *mdfm.Document satisfies this interface.
 type FrontmatterDocument interface {

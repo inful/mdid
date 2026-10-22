@@ -247,10 +247,14 @@ func processFile(path string) error {
 	}
 
 	if err := mdid.ProcessFile(path); err != nil {
+		// A deliberate refusal is not a failure: mdid will not write a uid it
+		// cannot safely write. Report it, but do not fail the run over it.
 		if errors.Is(err, mdid.ErrMergeKey) {
-			// A deliberate refusal, not a failure: mdid will not overwrite a
-			// uid it cannot see. Report it, but do not fail the run over it.
 			fmt.Fprintf(os.Stderr, "[skip] %s: frontmatter uses a YAML merge key, left unchanged\n", path)
+			return nil
+		}
+		if errors.Is(err, mdid.ErrAnchorInUse) {
+			fmt.Fprintf(os.Stderr, "[skip] %s: the uid key defines an anchor another key aliases, left unchanged\n", path)
 			return nil
 		}
 

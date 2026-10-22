@@ -212,6 +212,13 @@ and `ProcessDocumentAtTime`, so callers that already hold a parsed document
 avoid a second parse. `Get` is needed to tell a real identifier from a
 placeholder `uid:` key.
 
+#### `ErrAnchorInUse`
+
+Returned by `ProcessContent`, `ProcessFile` and `ProcessDocument` when the `uid`
+key defines a YAML anchor that another key still aliases. Filling in a
+placeholder would produce frontmatter that no longer parses, so the document is
+left untouched. Match it with `errors.Is`; the CLI reports it as a `[skip]`.
+
 #### `ErrMergeKey`
 
 Returned by `HasUID`, `ProcessContent`, `ProcessFile` and `ProcessDocument` when
@@ -288,9 +295,16 @@ inherited one. A skipped file is not a failure: the run still exits 0, and no
 other file is affected. Add a literal `uid:` to the frontmatter, or drop the
 merge key, to let mdid work on such a file.
 
-Because a skipped file keeps whatever uid it inherits and does not get one of
-its own, exit code 0 means "every markdown file was processed or deliberately
-left alone", not "every file now has a uid".
+The same happens when the placeholder `uid` key defines a YAML anchor that
+another key aliases (`uid: &u ""` plus `alias: *u`): filling it in would leave
+frontmatter that no longer parses, so mdid prints `[skip] <file>: the uid key
+defines an anchor another key aliases` and leaves the file alone. Library
+callers get `mdid.ErrMergeKey` and `mdid.ErrAnchorInUse` from the same calls,
+so both refusals can be matched with `errors.Is`.
+
+Because a skipped file keeps whatever uid it has and does not get one of its
+own, exit code 0 means "every markdown file was processed or deliberately left
+alone", not "every file now has a uid".
 
 ## Development
 

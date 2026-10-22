@@ -112,6 +112,64 @@ func TestProcessFileKeepsFileIdentity(t *testing.T) {
 	}
 }
 
+// TestProcessFileKeepsEncodingAndDelimiter locks in two more properties mdid
+// inherits from the write path: a UTF-8 BOM and a "..." closing delimiter both
+// survive, because dropping either silently changes the file.
+func TestProcessFileKeepsEncodingAndDelimiter(t *testing.T) {
+	const bom = "\xEF\xBB\xBF"
+
+	t.Run("keeps a UTF-8 BOM", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "bom.md")
+		if err := os.WriteFile(path, []byte(bom+"---\ntitle: x\n---\nbody\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := ProcessFile(path); err != nil {
+			t.Fatalf("ProcessFile() error = %v", err)
+		}
+		if got := mustReadFile(t, path); !strings.HasPrefix(got, bom) {
+			t.Errorf("ProcessFile() dropped the BOM: %q", got[:min(len(got), 8)])
+		}
+	})
+
+	t.Run("keeps a ... closing delimiter", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "dots.md")
+		if err := os.WriteFile(path, []byte("---\ntitle: x\n...\nbody\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := ProcessFile(path); err != nil {
+			t.Fatalf("ProcessFile() error = %v", err)
+		}
+		got := mustReadFile(t, path)
+		if !strings.Contains(got, "\n...\n") {
+			t.Errorf("ProcessFile() replaced the ... delimiter:\n%s", got)
+		}
+	})
+}
+
+// A placeholder uid that defines an anchor another key aliases cannot be
+// filled in without producing frontmatter that no longer parses. That is a
+// refusal, so the file is skipped and left byte-identical.
+func TestAnchorInUseUIDIsSkipped(t *testing.T) {
+	const content = "---\nuid: &u \"\"\nalias: *u\ntitle: aliased anchor\n---\nbody\n"
+
+	path := filepath.Join(t.TempDir(), "anchored.md")
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// HasUID only reads, so it correctly reports that this uid is unusable;
+	// the refusal comes from the write that would follow.
+	if has, err := HasUID(content); err != nil || has {
+		t.Errorf("HasUID() = %v, %v; want false, nil for an unusable uid", has, err)
+	}
+	if err := ProcessFile(path); !errors.Is(err, ErrAnchorInUse) {
+		t.Fatalf("ProcessFile() error = %v, want ErrAnchorInUse", err)
+	}
+	if got := mustReadFile(t, path); got != content {
+		t.Error("ProcessFile() rewrote a file whose uid anchor is in use")
+	}
+}
+
 // mustStat returns a file's FileInfo for the same-file and permission checks.
 func mustStat(t *testing.T, path string) os.FileInfo {
 	t.Helper()
