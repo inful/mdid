@@ -75,6 +75,40 @@ func TestUsageListsEveryFlag(t *testing.T) {
 // docsDir is the path used by the permutation cases below.
 const docsDir = "docs"
 
+// mergeKeyFrontmatter has no uid of its own; the merged keys supply one.
+const mergeKeyFrontmatter = "---\ndefaults: &d\n  uid: 11111111-1111-4111-8111-111111111111\n<<: *d\n---\n# hello\n"
+
+// A file mdid deliberately refuses is not a failure: the run stays green, the
+// file keeps its inherited uid, and the user is told which file was skipped.
+func TestMergeKeyFileIsSkipped(t *testing.T) {
+	setModes(t, true, true)
+
+	dir := t.TempDir()
+	merged := filepath.Join(dir, "merged.md")
+	if err := os.WriteFile(merged, []byte(mergeKeyFrontmatter), filePermissions); err != nil {
+		t.Fatal(err)
+	}
+	plain := filepath.Join(dir, "plain.md")
+	if err := os.WriteFile(plain, []byte("# hello"), filePermissions); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderrPath := captureOutputFiles(t)
+	if err := processDirectory(dir); err != nil {
+		t.Fatalf("processDirectory() error = %v, want nil for a skipped file", err)
+	}
+
+	if got := readFile(t, stderrPath); !strings.Contains(got, "[skip]") {
+		t.Errorf("processDirectory() stderr = %q, want a [skip] line", got)
+	}
+	if got := readFile(t, merged); got != mergeKeyFrontmatter {
+		t.Error("processDirectory() rewrote a file with a merge-keyed uid")
+	}
+	if got := readFile(t, plain); !strings.Contains(got, "uid:") {
+		t.Error("processDirectory() did not process the other files")
+	}
+}
+
 func TestPermuteArgs(t *testing.T) {
 	for _, tt := range []struct {
 		name string
@@ -86,6 +120,8 @@ func TestPermuteArgs(t *testing.T) {
 		{name: "no flags", args: []string{"a.md", "b.md"}, want: []string{"a.md", "b.md"}},
 		{name: "a bare dash is a path", args: []string{"-"}, want: []string{"-"}},
 		{name: "everything after -- stays", args: []string{"-v", "--", "-weird.md"}, want: []string{"-v", "--", "-weird.md"}},
+		{name: "separator in the middle", args: []string{"-r", docsDir, "--", "extra.md"}, want: []string{"-r", "--", docsDir, "extra.md"}},
+		{name: "separator with no paths at all", args: []string{"-v", "--"}, want: []string{"-v"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			got := permuteArgs(tt.args)

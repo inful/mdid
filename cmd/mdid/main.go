@@ -39,24 +39,30 @@ func initFlags() {
 
 // permuteArgs moves flags in front of paths, keeping the order within each
 // group. A bare "-" is a path, not a flag, and everything from "--" onwards is
-// left where it is.
+// left where it is; the separator itself moves with the flags.
 func permuteArgs(args []string) []string {
 	flags := make([]string, 0, len(args))
 	paths := make([]string, 0, len(args))
 	afterSeparator := false
+	hadSeparator := false
 
 	for _, arg := range args {
 		switch {
 		case afterSeparator:
 			paths = append(paths, arg)
 		case arg == "--":
-			afterSeparator = true
-			paths = append(paths, arg)
+			afterSeparator, hadSeparator = true, true
 		case len(arg) > 1 && strings.HasPrefix(arg, "-"):
 			flags = append(flags, arg)
 		default:
 			paths = append(paths, arg)
 		}
+	}
+
+	// The flag package stops at the first non-flag argument, so a separator
+	// written after a path has to be re-emitted straight after the flags.
+	if hadSeparator && len(paths) > 0 {
+		return append(append(flags, "--"), paths...)
 	}
 
 	return append(flags, paths...)
@@ -241,6 +247,13 @@ func processFile(path string) error {
 	}
 
 	if err := mdid.ProcessFile(path); err != nil {
+		if errors.Is(err, mdid.ErrMergeKey) {
+			// A deliberate refusal, not a failure: mdid will not overwrite a
+			// uid it cannot see. Report it, but do not fail the run over it.
+			fmt.Fprintf(os.Stderr, "[skip] %s: frontmatter uses a YAML merge key, left unchanged\n", path)
+			return nil
+		}
+
 		return err
 	}
 

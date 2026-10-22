@@ -170,10 +170,14 @@ Returns the content unchanged if a usable `uid` is already present.
 
 Reports whether the markdown content's frontmatter contains a `uid` field with a
 value. Returns `false` for content with no frontmatter, no `uid`, or a
-placeholder `uid` (empty, `null`, or a number). Returns an error only for
-malformed YAML frontmatter. Useful when callers want to inspect a
-document without mutating it (and as the canonical "is this a known document?"
-check before any batch processing).
+placeholder `uid` (empty, `null`, or a number). Useful when callers want to
+inspect a document without mutating it (and as the canonical "is this a known
+document?" check before any batch processing).
+
+It returns an error when the frontmatter cannot be parsed, and
+[`ErrMergeKey`](#errmergekey) when the frontmatter uses a YAML merge key with no
+`uid` of its own — the answer would be a guess, so callers must check for it
+with `errors.Is` rather than treating every error as malformed input.
 
 #### `ProcessContentAtTime(content string, t time.Time) (string, error)`
 
@@ -207,6 +211,17 @@ Any type implementing these three methods can be passed to `ProcessDocument`
 and `ProcessDocumentAtTime`, so callers that already hold a parsed document
 avoid a second parse. `Get` is needed to tell a real identifier from a
 placeholder `uid:` key.
+
+#### `ErrMergeKey`
+
+Returned by `HasUID`, `ProcessContent`, `ProcessFile` and `ProcessDocument` when
+the frontmatter uses a YAML merge key (`<<: *anchor`) and has no literal `uid`
+of its own. The merged keys may already supply a uid, and mdid cannot see it
+without expanding YAML merges, so it refuses instead of adding an identifier
+that would shadow the inherited one. Test for it with `errors.Is(err,
+mdid.ErrMergeKey)`; the file or document is left untouched. The CLI prints
+`[skip]` for such a file and continues, so a run over a tree containing one is
+not an error.
 
 #### `UIDField`
 
@@ -262,9 +277,15 @@ a larger diff than the one new line:
 
 If the frontmatter uses a YAML merge key (`<<: *anchor`) and has no `uid` key
 of its own, mdid cannot see whether the merged keys already supply one. It
-reports an error and leaves the file alone rather than adding an identifier
-that would shadow the inherited one. Add a literal `uid:` to the frontmatter,
-or drop the merge key, to let mdid work on such a file.
+prints `[skip] <file>: frontmatter uses a YAML merge key, left unchanged` and
+leaves the file alone rather than adding an identifier that would shadow the
+inherited one. A skipped file is not a failure: the run still exits 0, and no
+other file is affected. Add a literal `uid:` to the frontmatter, or drop the
+merge key, to let mdid work on such a file.
+
+Because a skipped file keeps whatever uid it inherits and does not get one of
+its own, exit code 0 means "every markdown file was processed or deliberately
+left alone", not "every file now has a uid".
 
 ## Development
 

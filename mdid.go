@@ -145,8 +145,11 @@ func formatUUIDv7(u [16]byte) string {
 
 // HasUID reports whether the markdown content's frontmatter contains a uid
 // field with a value. It returns false when the content has no frontmatter, no
-// uid, or an empty uid — a placeholder key is not an identifier. It returns an
-// error only when the content has malformed YAML frontmatter.
+// uid, or an empty uid — a placeholder key is not an identifier.
+//
+// It returns an error when the frontmatter cannot be parsed, and ErrMergeKey
+// when the frontmatter uses a YAML merge key and has no uid of its own, so the
+// answer would be a guess. Test for it with errors.Is.
 func HasUID(content string) (bool, error) {
 	doc, err := mdfm.ParseString(content)
 	if err != nil {
