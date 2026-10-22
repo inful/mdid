@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 package main
 
 import (
@@ -5,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,9 +15,14 @@ import (
 	"github.com/inful/mdid"
 )
 
-const version = "0.3.0"
+// version is a var, not a const, so the release build can stamp the real
+// version into it with -ldflags "-X main.version=...". Builds without those
+// flags (go install, local builds) report "dev" rather than a number that
+// goes stale.
+var version = "dev"
 
-const filePermissions = 0o600
+// exitCodeUsage is the conventional exit code for "you called me wrong".
+const exitCodeUsage = 2
 
 var (
 	recursiveMode bool
@@ -30,7 +38,7 @@ func initFlags() {
 }
 
 func usage() {
-	fmt.Fprintf(os.Stderr, "mdid - Markdown ID Tool v%s\n\n", version)
+	fmt.Fprintf(os.Stderr, "mdid - Markdown ID Tool %s\n\n", version)
 	fmt.Fprintf(os.Stderr, "Usage: mdid [options] <file|directory>...\n")
 	fmt.Fprintf(os.Stderr, "       mdid [options]            # Read from stdin, write to stdout\n\n")
 	fmt.Fprintf(os.Stderr, "Options:\n")
@@ -47,12 +55,18 @@ func main() {
 	flag.Parse()
 
 	if showVersion {
-		fmt.Fprintf(os.Stderr, "mdid version %s\n", version)
+		_, _ = fmt.Fprintf(os.Stdout, "mdid version %s\n", version)
 		os.Exit(0)
 	}
 
 	args := flag.Args()
 	if len(args) == 0 {
+		// With no arguments mdid reads stdin. On a terminal that looks like a
+		// hang until the user finds Ctrl-D, so print the usage instead.
+		if isInteractiveTerminal() {
+			usage()
+			os.Exit(exitCodeUsage)
+		}
 		if err := processStdin(); err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 			os.Exit(1)
@@ -90,7 +104,29 @@ func processPath(path string) error {
 	return processFile(path)
 }
 
+// isInteractiveTerminal reports whether stdin and stdout are the same terminal.
+// Both ends must be character devices and the same device: a lone
+// `mdid < /dev/null > out.md` must be treated as a redirection, not as a
+// terminal, even though /dev/null is itself a character device.
+func isInteractiveTerminal() bool {
+	in, err := os.Stdin.Stat()
+	if err != nil || in.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+
+	out, err := os.Stdout.Stat()
+	if err != nil || out.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+
+	return os.SameFile(in, out)
+}
+
 func processStdin() error {
+	// shortcut: io.ReadAll grows from 512 bytes and recopies as it goes, and
+	// mdfm then copies the body again, so a very large piped document costs a
+	// few times its size in memory. Fine for markdown; add a size limit if this
+	// is ever pointed at unbounded input.
 	content, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		return fmt.Errorf("failed to read from stdin: %w", err)
@@ -117,11 +153,15 @@ func processStdin() error {
 func processDirectory(dir string) error {
 	var errs []string
 
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return err
+			// One unreadable directory must not end the walk: keep going and
+			// report it with the other failures, or the rest of the tree is
+			// silently left without a uid.
+			errs = append(errs, err.Error())
+			return nil
 		}
-		if info.Mode()&os.ModeSymlink != 0 || info.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
+		if d.Type()&os.ModeSymlink != 0 || d.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
 			return nil
 		}
 		if err := processFile(path); err != nil {
@@ -130,7 +170,7 @@ func processDirectory(dir string) error {
 		return nil
 	})
 	if err != nil {
-		return err
+		errs = append(errs, err.Error())
 	}
 
 	if len(errs) > 0 {

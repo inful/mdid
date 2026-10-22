@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // Package mdid provides functionality for adding unique identifiers
 // to markdown files with YAML frontmatter.
 package mdid
@@ -6,6 +8,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/inful/mdfm"
@@ -18,32 +21,8 @@ const UIDField = "uid"
 // document's frontmatter. *mdfm.Document satisfies this interface.
 type FrontmatterDocument interface {
 	Has(key string) (bool, error)
+	Get(key string) (any, bool, error)
 	SetString(key, value string) error
-}
-
-// frontmatterCodec is the full set of operations mdid performs on a parsed
-// markdown document. *mdfm.Document satisfies this interface; tests can
-// substitute other implementations to exercise error paths without depending
-// on the mdfm library's internal failure modes.
-type frontmatterCodec interface {
-	FrontmatterDocument
-	Bytes() ([]byte, error)
-}
-
-// parseFrontmatter parses markdown content into a document codec. It is a
-// package variable so tests can inject failing implementations; production
-// callers should treat it as opaque.
-var parseFrontmatter = func(content string) (frontmatterCodec, error) {
-	return mdfm.ParseString(content)
-}
-
-// updateFrontmatterFile reads path, applies update, and writes the result
-// back. It is a package variable so tests can inject failing implementations;
-// production callers should treat it as opaque.
-var updateFrontmatterFile = func(path string, update func(frontmatterCodec) error) error {
-	return mdfm.UpdateFile(path, func(doc *mdfm.Document) error {
-		return update(doc)
-	})
 }
 
 // UUID v7 byte layout constants (RFC 9562, Section 5.7).
@@ -77,17 +56,18 @@ func GenerateUID() string {
 func GenerateUIDAtTime(t time.Time) string {
 	var u [16]byte
 	// crypto/rand.Read goes straight to the OS CSPRNG (getrandom /
-	// BCryptGenRandom) and is documented to never return an error in
-	// practice. We call it directly rather than through a function variable
-	// so the local u stays on the stack — a function-variable indirection
-	// would force the compiler to assume the slice may be retained and
-	// promote u to the heap. Only the random bits in bytes 6-15 are used;
-	// bytes 0-5 are overwritten by the timestamp below.
-	if _, err := rand.Read(u[:]); err != nil {
-		panic("mdid: crypto/rand failed: " + err.Error())
-	}
+	// BCryptGenRandom) and, since Go 1.24, never returns an error. We call it
+	// directly rather than through a function variable so the local u stays on
+	// the stack — a function-variable indirection would force the compiler to
+	// assume the slice may be retained and promote u to the heap. Only the
+	// random bits in bytes 6-15 are used; bytes 0-5 are overwritten by the
+	// timestamp below.
+	_, _ = rand.Read(u[:])
 
-	ms := uint64(t.UnixMilli()) // timestamp is always non-negative for modern files
+	// The timestamp field is 48 unsigned bits. A time before 1970 (a zero
+	// time.Time, a pre-epoch file mtime) has no place there, so clamp it to the
+	// epoch instead of wrapping into the far future.
+	ms := uint64(max(t.UnixMilli(), 0))
 	u[0] = byte(ms >> msShift40)
 	u[1] = byte(ms >> msShift32)
 	u[2] = byte(ms >> msShift24)
@@ -153,15 +133,37 @@ func formatUUIDv7(u [16]byte) string {
 }
 
 // HasUID reports whether the markdown content's frontmatter contains a uid
-// field. It returns false when the content has no frontmatter or the
-// frontmatter has no uid. It returns an error only when the content has
-// malformed YAML frontmatter.
+// field with a value. It returns false when the content has no frontmatter, no
+// uid, or an empty uid — a placeholder key is not an identifier. It returns an
+// error only when the content has malformed YAML frontmatter.
 func HasUID(content string) (bool, error) {
-	doc, err := parseFrontmatter(content)
+	doc, err := mdfm.ParseString(content)
 	if err != nil {
 		return false, err
 	}
-	return doc.Has(UIDField)
+	return hasUID(doc)
+}
+
+// hasUID reports whether doc already carries a usable uid. A key that exists
+// but holds nothing usable (empty, null, a number) counts as missing, so a
+// placeholder gets a real identifier instead of being reported as done.
+func hasUID(doc FrontmatterDocument) (bool, error) {
+	present, err := doc.Has(UIDField)
+	if err != nil || !present {
+		return false, err
+	}
+
+	// A usable uid is a non-empty string. `uid: null` decodes to a nil value
+	// and `uid: 12345` to a number; neither is an identifier, so both fall
+	// through and get a real one.
+	value, _, err := doc.Get(UIDField)
+	if err != nil {
+		return false, err
+	}
+
+	text, ok := value.(string)
+
+	return ok && strings.TrimSpace(text) != "", nil
 }
 
 // ProcessDocument adds a uid to doc's frontmatter if one is not already
@@ -175,11 +177,11 @@ func ProcessDocument(doc FrontmatterDocument) error {
 // present, embedding t as the UUID v7 timestamp. The document is mutated
 // in place.
 func ProcessDocumentAtTime(doc FrontmatterDocument, t time.Time) error {
-	hasUID, err := doc.Has(UIDField)
+	has, err := hasUID(doc)
 	if err != nil {
 		return err
 	}
-	if hasUID {
+	if has {
 		return nil
 	}
 
@@ -187,26 +189,26 @@ func ProcessDocumentAtTime(doc FrontmatterDocument, t time.Time) error {
 }
 
 // ProcessContent adds a uid to the frontmatter if one is not already present,
-// using the current time as the UUID v7 timestamp. If a uid already exists, the
-// content is returned unchanged.
+// using the current time as the UUID v7 timestamp. If a usable uid already
+// exists, the content is returned unchanged.
 func ProcessContent(content string) (string, error) {
 	return ProcessContentAtTime(content, time.Now())
 }
 
 // ProcessContentAtTime adds a uid to the frontmatter if one is not already
-// present, embedding t as the UUID v7 timestamp. If a uid already exists, the
-// content is returned unchanged.
+// present, embedding t as the UUID v7 timestamp. If a usable uid already
+// exists, the content is returned unchanged.
 func ProcessContentAtTime(content string, t time.Time) (string, error) {
-	doc, err := parseFrontmatter(content)
+	doc, err := mdfm.ParseString(content)
 	if err != nil {
 		return "", err
 	}
 
-	hasUID, err := doc.Has(UIDField)
-	if err != nil {
-		return "", err
+	has, hasErr := hasUID(doc)
+	if hasErr != nil {
+		return "", hasErr
 	}
-	if hasUID {
+	if has {
 		return content, nil
 	}
 
@@ -225,7 +227,7 @@ func ProcessContentAtTime(content string, t time.Time) (string, error) {
 // ProcessFile reads a markdown file, adds a uid if missing, and writes it back.
 // The uid timestamp is derived from the file's modification time so that
 // documents are time-sortable by when they were last edited. If the file
-// already contains a uid it is left untouched.
+// already contains a usable uid it is left untouched.
 func ProcessFile(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -236,12 +238,12 @@ func ProcessFile(path string) error {
 	}
 
 	uidTime := info.ModTime()
-	err = updateFrontmatterFile(path, func(doc frontmatterCodec) error {
-		hasUID, hasErr := doc.Has(UIDField)
+	err = mdfm.UpdateFile(path, func(doc *mdfm.Document) error {
+		has, hasErr := hasUID(doc)
 		if hasErr != nil {
 			return hasErr
 		}
-		if hasUID {
+		if has {
 			return nil
 		}
 

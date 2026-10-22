@@ -2,13 +2,16 @@
 
 mdid (Markdown ID) is a Go library and command-line tool for adding unique identifiers
 to markdown files. It generates a UUID v7 and stores it in the YAML frontmatter under a
-`uid` field — but only if one is not already present. Once assigned, the uid is never
-overwritten, making it a stable identifier for the document.
+`uid` field — but only if no usable uid is already there. Once assigned, the uid
+is never overwritten, making it a stable identifier for the document. A `uid:`
+key with no usable value (empty, `null`, a number) counts as missing and is
+filled in.
 
 ## Features
 
-- **Pure Go library** — Uses `github.com/google/uuid` for UUID generation and `github.com/inful/mdfm` for frontmatter parsing/mutation
+- **Pure Go library** — UUID v7 is generated in-package from `crypto/rand`; `github.com/inful/mdfm` handles frontmatter parsing/mutation
 - **Stable identifiers** — Adds a `uid` only when missing; never overwrites an existing one
+- **Fills placeholders** — A `uid:` key with no usable value (empty, `null`, a number) is treated as missing and gets a real identifier
 - **UUID v7** — Time-sortable identifiers
 - **Timestamp strategy** — `ProcessFile` uses file `mtime`; `ProcessContent` uses current time unless `ProcessContentAtTime` is used
 - **Automatic frontmatter management** — Creates frontmatter if the file has none
@@ -58,7 +61,7 @@ title: My Document
 # Content
 ```
 
-If the file already contains a `uid`, it is left completely untouched.
+If the file already contains a usable `uid`, it is left completely untouched.
 
 #### Process multiple files
 
@@ -87,6 +90,18 @@ cat document.md | mdid > output.md
 # Process in a pipeline
 curl https://example.com/document.md | mdid | gzip > output.md.gz
 ```
+
+With no file arguments **and a terminal on both stdin and stdout**, `mdid`
+prints its usage and exits 2 rather than waiting for you to press Ctrl-D. A pipe
+or a redirection such as `mdid < /dev/null > output.md` is processed normally.
+
+#### Exit codes
+
+| Code | Meaning |
+| ---- | ------- |
+| 0 | Everything asked for was processed |
+| 1 | At least one file, or the input, could not be processed; the rest still were |
+| 2 | Called with no arguments on a terminal; the usage was printed |
 
 #### Get help
 
@@ -133,18 +148,19 @@ title: Test
 #### `ProcessFile(filepath string) error`
 
 Reads a markdown file, adds a `uid` if missing, and writes it back. If the file
-already contains a `uid`, it is left untouched.
+already contains a usable `uid`, it is left untouched.
 
 #### `ProcessContent(content string) (string, error)`
 
 Processes markdown content and returns it with a `uid` added to the frontmatter.
-Returns the content unchanged if a `uid` is already present.
+Returns the content unchanged if a usable `uid` is already present.
 
 #### `HasUID(content string) (bool, error)`
 
-Reports whether the markdown content's frontmatter contains a `uid` field.
-Returns `false` for content with no frontmatter or no `uid`. Returns an error
-only for malformed YAML frontmatter. Useful when callers want to inspect a
+Reports whether the markdown content's frontmatter contains a `uid` field with a
+value. Returns `false` for content with no frontmatter, no `uid`, or a
+placeholder `uid` (empty, `null`, or a number). Returns an error only for
+malformed YAML frontmatter. Useful when callers want to inspect a
 document without mutating it (and as the canonical "is this a known document?"
 check before any batch processing).
 
@@ -152,7 +168,7 @@ check before any batch processing).
 
 Processes markdown content using an explicit timestamp for the UUID v7. Useful when you
 have a known reference time for the content (e.g. the mtime of the originating file).
-Returns the content unchanged if a `uid` is already present.
+Returns the content unchanged if a usable `uid` is already present.
 
 #### `ProcessDocument(doc FrontmatterDocument) error`
 
@@ -171,13 +187,21 @@ The minimal interface satisfied by `*mdfm.Document`:
 ```go
 type FrontmatterDocument interface {
     Has(key string) (bool, error)
+    Get(key string) (any, bool, error)
     SetString(key, value string) error
 }
 ```
 
-Any type implementing these two methods can be passed to `ProcessDocument` and
-`ProcessDocumentAtTime`, so callers that already hold a parsed document avoid a
-second parse.
+Any type implementing these three methods can be passed to `ProcessDocument`
+and `ProcessDocumentAtTime`, so callers that already hold a parsed document
+avoid a second parse. `Get` is needed to tell a real identifier from a
+placeholder `uid:` key.
+
+#### `UIDField`
+
+The frontmatter key mdid reads and writes: the constant string `"uid"`. Use it
+instead of repeating the literal when you need to look the identifier up in a
+parsed document.
 
 #### `GenerateUID() string`
 
@@ -204,6 +228,19 @@ and `ProcessContentAtTime` accepts an explicit timestamp for full control.
 The `uid` is inserted into frontmatter through `mdfm`'s YAML-aware mutation APIs,
 and once set it is never changed, making it a reliable long-term identifier for the document.
 
+## What changes in your files
+
+Adding a `uid` rewrites the whole frontmatter block, so the first run can produce
+a larger diff than the one new line:
+
+- **Nested YAML is re-indented** from 2 spaces to 4. `- one` becomes `    - one`.
+  The YAML means exactly the same thing; the text does not.
+- Comments, quoting style, long lines, dates and literal blocks are preserved.
+- Line endings (LF or CRLF) and the file's permissions are preserved, and a
+  UTF-8 BOM is dropped.
+- Files that already have a usable `uid` are not touched at all, so later runs
+  are no-ops.
+
 ## Development
 
 ### Running Tests
@@ -227,7 +264,9 @@ golangci-lint run ./...
 ## License
 
 This project is licensed under the GNU General Public License v3.0 or later
-(GPL-3.0-or-later) — see the [LICENSE](LICENSE) file for details.
+(GPL-3.0-or-later). Every Go file carries
+`// SPDX-License-Identifier: GPL-3.0-or-later`, so license scanners read the same
+grant as this section; see the [LICENSE](LICENSE) file for the full text.
 
 ## Contributing
 

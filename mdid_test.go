@@ -1,14 +1,17 @@
 package mdid
 
 import (
-	"errors"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+
+	"github.com/inful/mdfm"
 )
 
 // testFrontmatterInput is a minimal markdown document used across multiple tests.
@@ -24,63 +27,16 @@ func isValidV7UUID(s string) bool {
 	return uuidV7Re.MatchString(s)
 }
 
-// parseUUIDBytes decodes a canonical 36-char UUID string into its 16 raw
-// bytes. Equivalent to uuid.UUID's slice form but without the dependency.
-func parseUUIDBytes(uid string) ([16]byte, error) {
-	var b [16]byte
-	if !isCanonicalUUID(uid) {
-		return b, errors.New("invalid UUID format")
-	}
-	bi := 0
-	for i := 0; i < 36; i++ {
-		if isDashPos(i) {
-			continue
-		}
-		hi, ok := hexNibble(uid[i])
-		if !ok {
-			return b, fmt.Errorf("invalid hex digit at position %d: %q", i, uid[i])
-		}
-		lo, ok := hexNibble(uid[i+1])
-		if !ok {
-			return b, fmt.Errorf("invalid hex digit at position %d: %q", i+1, uid[i+1])
-		}
-		b[bi] = hi<<4 | lo
-		bi++
-		i++ // skip the second hex digit
-	}
-	return b, nil
-}
-
-func isCanonicalUUID(uid string) bool {
-	if len(uid) != 36 {
-		return false
-	}
-	return uid[8] == '-' && uid[13] == '-' && uid[18] == '-' && uid[23] == '-'
-}
-
-func isDashPos(i int) bool {
-	return i == 8 || i == 13 || i == 18 || i == 23
-}
-
-func hexNibble(c byte) (byte, bool) {
-	switch {
-	case '0' <= c && c <= '9':
-		return c - '0', true
-	case 'a' <= c && c <= 'f':
-		return c - 'a' + 10, true
-	case 'A' <= c && c <= 'F':
-		return c - 'A' + 10, true
-	default:
-		return 0, false
-	}
-}
-
-// parseV7Timestamp extracts the millisecond timestamp embedded in a UUID v7.
+// parseV7Timestamp decodes a canonical 36-char UUID string and returns the
+// millisecond timestamp embedded in it.
 func parseV7Timestamp(uid string) (time.Time, error) {
-	b, err := parseUUIDBytes(uid)
-	if err != nil {
-		return time.Time{}, err
+	var b [16]byte
+	raw, err := hex.DecodeString(strings.ReplaceAll(uid, "-", ""))
+	if err != nil || len(raw) != len(b) {
+		return time.Time{}, fmt.Errorf("invalid UUID format: %q", uid)
 	}
+	copy(b[:], raw)
+
 	if b[6]>>4 != 7 {
 		return time.Time{}, fmt.Errorf("expected UUID v7, got v%d", b[6]>>4)
 	}
@@ -96,6 +52,74 @@ func getUIDFromContent(content string) string {
 	}
 
 	return matches[1]
+}
+
+// mustParse parses content, failing the test if it is not valid markdown.
+func mustParse(t *testing.T, content string) *mdfm.Document {
+	t.Helper()
+
+	doc, err := mdfm.ParseString(content)
+	if err != nil {
+		t.Fatalf("mdfm.ParseString() error = %v", err)
+	}
+
+	return doc
+}
+
+// mustBytes serializes doc, failing the test if it cannot be serialized.
+func mustBytes(t *testing.T, doc *mdfm.Document) string {
+	t.Helper()
+
+	out, err := doc.Bytes()
+	if err != nil {
+		t.Fatalf("Document.Bytes() error = %v", err)
+	}
+
+	return string(out)
+}
+
+// mustReadFile reads a file the test just wrote.
+func mustReadFile(t *testing.T, path string) string {
+	t.Helper()
+
+	content, err := os.ReadFile(path) //nolint:gosec // path is built by the test
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q) error = %v", path, err)
+	}
+
+	return string(content)
+}
+
+// The library keeps no shared state, so callers may process documents in
+// parallel. This test is what keeps that true: run with -race, it fails the
+// moment a package-level cache or counter appears.
+func TestProcessContentInParallel(t *testing.T) {
+	const workers = 8
+
+	var wg sync.WaitGroup
+	uids := make([]string, workers)
+	for i := range workers {
+		wg.Go(func() {
+			out, err := ProcessContent(testFrontmatterInput)
+			if err != nil {
+				t.Errorf("ProcessContent() error = %v", err)
+				return
+			}
+			uids[i] = getUIDFromContent(out)
+		})
+	}
+	wg.Wait()
+
+	seen := make(map[string]bool, workers)
+	for i, uid := range uids {
+		if !isValidV7UUID(uid) {
+			t.Fatalf("worker %d produced uid %q, want a valid UUID v7", i, uid)
+		}
+		if seen[uid] {
+			t.Fatalf("workers produced the same uid %q twice", uid)
+		}
+		seen[uid] = true
+	}
 }
 
 func TestGenerateUID(t *testing.T) {
@@ -131,6 +155,34 @@ func TestGenerateUIDAtTime(t *testing.T) {
 	uid2 := GenerateUIDAtTime(knownTime)
 	if uid == uid2 {
 		t.Error("GenerateUIDAtTime() returned identical UIDs for the same time")
+	}
+}
+
+func TestGenerateUIDAtTimeClampsNegativeTime(t *testing.T) {
+	// A zero time or a pre-1970 file mtime has no place in the 48 unsigned
+	// bits of the timestamp field; it must clamp to the epoch instead of
+	// wrapping into the far future.
+	for _, tt := range []struct {
+		name string
+		when time.Time
+	}{
+		{name: "zero time", when: time.Time{}},
+		{name: "before the epoch", when: time.Date(1969, 6, 15, 12, 0, 0, 0, time.UTC)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			uid := GenerateUIDAtTime(tt.when)
+			if !isValidV7UUID(uid) {
+				t.Fatalf("GenerateUIDAtTime(%v) = %q, want valid UUID v7", tt.when, uid)
+			}
+
+			ts, err := parseV7Timestamp(uid)
+			if err != nil {
+				t.Fatalf("parseV7Timestamp() error = %v", err)
+			}
+			if ts.Before(time.UnixMilli(0)) || ts.After(time.Now().Add(time.Minute)) {
+				t.Errorf("GenerateUIDAtTime(%v) timestamp = %v, want at or after the Unix epoch", tt.when, ts)
+			}
+		})
 	}
 }
 
@@ -193,6 +245,56 @@ func TestProcessContent(t *testing.T) { //nolint:cyclop
 	})
 }
 
+// TestProcessContentFillsPlaceholderUID covers a uid key that exists but holds
+// nothing usable: it is a placeholder, not an identifier, so it must be filled.
+func TestHasUIDRejectsPlaceholderUID(t *testing.T) {
+	for _, input := range []string{
+		"---\nuid:\n---\n# Content",
+		"---\nuid: \"\"\n---\n# Content",
+		"---\nuid: null\n---\n# Content",
+		"---\nuid: 12345\n---\n# Content",
+	} {
+		has, err := HasUID(input)
+		if err != nil {
+			t.Fatalf("HasUID(%q) error = %v", input, err)
+		}
+		if has {
+			t.Errorf("HasUID(%q) = true, want false for a placeholder uid", input)
+		}
+	}
+}
+
+func TestProcessContentFillsPlaceholderUID(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+	}{
+		{name: "empty value", content: "---\nuid:\ntitle: Test\n---\n# Content"},
+		{name: "quoted spaces", content: "---\nuid: \"   \"\n---\n# Content"},
+		{name: "null", content: "---\nuid: null\n---\n# Content"},
+		{name: "not a string", content: "---\nuid: 12345\n---\n# Content"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			has, err := HasUID(tt.content)
+			if err != nil {
+				t.Fatalf("HasUID() error = %v", err)
+			}
+			if has {
+				t.Fatal("HasUID() = true for a placeholder uid, want false")
+			}
+
+			got, err := ProcessContent(tt.content)
+			if err != nil {
+				t.Fatalf("ProcessContent() error = %v", err)
+			}
+			uid := getUIDFromContent(got)
+			if !isValidV7UUID(uid) {
+				t.Errorf("ProcessContent() uid = %q, want a real UUID v7", uid)
+			}
+		})
+	}
+}
+
 func TestProcessContentAtTime(t *testing.T) {
 	t.Run("embeds provided timestamp in uid", func(t *testing.T) {
 		knownTime := time.Date(2024, 3, 10, 8, 0, 0, 0, time.UTC)
@@ -224,39 +326,15 @@ func TestProcessContentAtTime(t *testing.T) {
 	})
 }
 
-// stubDoc is a minimal FrontmatterDocument for testing ProcessDocument.
-type stubDoc struct {
-	fields map[string]string
-	hasErr error
-	setErr error
-}
-
-func (s *stubDoc) Has(key string) (bool, error) {
-	if s.hasErr != nil {
-		return false, s.hasErr
-	}
-	_, ok := s.fields[key]
-	return ok, nil
-}
-
-func (s *stubDoc) SetString(key, value string) error {
-	if s.setErr != nil {
-		return s.setErr
-	}
-	s.fields[key] = value
-	return nil
-}
-
+// TestProcessDocument exercises the public FrontmatterDocument entry points
+// against the real *mdfm.Document, which is the implementation callers get.
 func TestProcessDocument(t *testing.T) {
 	t.Run("adds uid when missing", func(t *testing.T) {
-		doc := &stubDoc{fields: map[string]string{}}
+		doc := mustParse(t, testFrontmatterInput)
 		if err := ProcessDocument(doc); err != nil {
 			t.Fatalf("ProcessDocument() error = %v", err)
 		}
-		uid, ok := doc.fields[UIDField]
-		if !ok {
-			t.Fatal("ProcessDocument() did not set uid field")
-		}
+		uid := getUIDFromContent(mustBytes(t, doc))
 		if !isValidV7UUID(uid) {
 			t.Errorf("ProcessDocument() uid = %q, want valid UUID v7", uid)
 		}
@@ -264,26 +342,23 @@ func TestProcessDocument(t *testing.T) {
 
 	t.Run("does not overwrite existing uid", func(t *testing.T) {
 		const existingUID = "11111111-1111-4111-8111-111111111111"
-		doc := &stubDoc{fields: map[string]string{UIDField: existingUID}}
+		doc := mustParse(t, "---\nuid: "+existingUID+"\n---\n# Content")
+		before := mustBytes(t, doc)
 		if err := ProcessDocument(doc); err != nil {
 			t.Fatalf("ProcessDocument() error = %v", err)
 		}
-		if doc.fields[UIDField] != existingUID {
-			t.Errorf("ProcessDocument() overwrote existing uid")
+		if got := mustBytes(t, doc); got != before {
+			t.Errorf("ProcessDocument() overwrote existing uid: %q", got)
 		}
 	})
 
-	t.Run("propagates Has error", func(t *testing.T) {
-		doc := &stubDoc{fields: map[string]string{}, hasErr: errors.New("has error")}
-		if err := ProcessDocument(doc); err == nil {
-			t.Fatal("ProcessDocument() expected error from Has")
+	t.Run("fills in a placeholder uid", func(t *testing.T) {
+		doc := mustParse(t, "---\nuid:\n---\n# Content")
+		if err := ProcessDocument(doc); err != nil {
+			t.Fatalf("ProcessDocument() error = %v", err)
 		}
-	})
-
-	t.Run("propagates SetString error", func(t *testing.T) {
-		doc := &stubDoc{fields: map[string]string{}, setErr: errors.New("set error")}
-		if err := ProcessDocument(doc); err == nil {
-			t.Fatal("ProcessDocument() expected error from SetString")
+		if uid := getUIDFromContent(mustBytes(t, doc)); !isValidV7UUID(uid) {
+			t.Errorf("ProcessDocument() uid = %q, want a real UUID v7", uid)
 		}
 	})
 }
@@ -291,12 +366,11 @@ func TestProcessDocument(t *testing.T) {
 func TestProcessDocumentAtTime(t *testing.T) {
 	t.Run("embeds provided timestamp in uid", func(t *testing.T) {
 		knownTime := time.Date(2024, 3, 10, 8, 0, 0, 0, time.UTC)
-		doc := &stubDoc{fields: map[string]string{}}
+		doc := mustParse(t, testFrontmatterInput)
 		if err := ProcessDocumentAtTime(doc, knownTime); err != nil {
 			t.Fatalf("ProcessDocumentAtTime() error = %v", err)
 		}
-		uid := doc.fields[UIDField]
-		ts, err := parseV7Timestamp(uid)
+		ts, err := parseV7Timestamp(getUIDFromContent(mustBytes(t, doc)))
 		if err != nil {
 			t.Fatalf("parseV7Timestamp() error = %v", err)
 		}
@@ -308,12 +382,13 @@ func TestProcessDocumentAtTime(t *testing.T) {
 
 	t.Run("does not overwrite existing uid", func(t *testing.T) {
 		const existingUID = "11111111-1111-4111-8111-111111111111"
-		doc := &stubDoc{fields: map[string]string{UIDField: existingUID}}
+		doc := mustParse(t, "---\nuid: "+existingUID+"\n---\n# Content")
+		before := mustBytes(t, doc)
 		if err := ProcessDocumentAtTime(doc, time.Now()); err != nil {
 			t.Fatalf("ProcessDocumentAtTime() error = %v", err)
 		}
-		if doc.fields[UIDField] != existingUID {
-			t.Errorf("ProcessDocumentAtTime() overwrote existing uid")
+		if got := mustBytes(t, doc); got != before {
+			t.Errorf("ProcessDocumentAtTime() overwrote existing uid: %q", got)
 		}
 	})
 }
@@ -329,8 +404,7 @@ func testProcessFileAddsUID(t *testing.T, tmpDir string) {
 		if err := ProcessFile(f); err != nil {
 			t.Fatalf("ProcessFile() error = %v", err)
 		}
-		got, _ := os.ReadFile(f) //nolint:gosec
-		if !strings.Contains(string(got), "uid:") {
+		if got := mustReadFile(t, f); !strings.Contains(got, "uid:") {
 			t.Error("ProcessFile() did not add uid")
 		}
 	})
@@ -344,8 +418,7 @@ func testProcessFileAddsUID(t *testing.T, tmpDir string) {
 		if err := ProcessFile(f); err != nil {
 			t.Fatalf("ProcessFile() error = %v", err)
 		}
-		got, _ := os.ReadFile(f) //nolint:gosec
-		gotStr := string(got)
+		gotStr := mustReadFile(t, f)
 		if !strings.Contains(gotStr, "uid:") {
 			t.Error("ProcessFile() did not add uid")
 		}
@@ -354,6 +427,23 @@ func testProcessFileAddsUID(t *testing.T, tmpDir string) {
 		}
 		if !strings.Contains(gotStr, "# Hello World") {
 			t.Error("ProcessFile() lost body content")
+		}
+	})
+}
+
+func testProcessFileFillsPlaceholderUID(t *testing.T, tmpDir string) {
+	t.Helper()
+
+	t.Run("replaces a placeholder uid", func(t *testing.T) {
+		f := filepath.Join(tmpDir, "placeholder.md")
+		if err := os.WriteFile(f, []byte("---\nuid:\n---\n# Content"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := ProcessFile(f); err != nil {
+			t.Fatalf("ProcessFile() error = %v", err)
+		}
+		if uid := getUIDFromContent(mustReadFile(t, f)); !isValidV7UUID(uid) {
+			t.Errorf("ProcessFile() left a placeholder uid in place: %q", uid)
 		}
 	})
 }
@@ -374,8 +464,7 @@ func testProcessFileUsesMtime(t *testing.T, tmpDir string) {
 		if err := ProcessFile(f); err != nil {
 			t.Fatalf("ProcessFile() error = %v", err)
 		}
-		got, _ := os.ReadFile(f) //nolint:gosec
-		uid := getUIDFromContent(string(got))
+		uid := getUIDFromContent(mustReadFile(t, f))
 		ts, err := parseV7Timestamp(uid)
 		if err != nil {
 			t.Fatalf("parseV7Timestamp() error = %v", err)
@@ -458,60 +547,10 @@ func testProcessFileErrors(t *testing.T, tmpDir string) {
 func TestProcessFile(t *testing.T) {
 	tmpDir := t.TempDir()
 	testProcessFileAddsUID(t, tmpDir)
+	testProcessFileFillsPlaceholderUID(t, tmpDir)
 	testProcessFileUsesMtime(t, tmpDir)
 	testProcessFilePreservesExisting(t, tmpDir)
 	testProcessFileErrors(t, tmpDir)
-}
-
-// stubCodec is a minimal frontmatterCodec for testing error paths that the
-// mdfm library does not surface in normal operation.
-type stubCodec struct {
-	fields   map[string]string
-	hasErr   error
-	setErr   error
-	bytesErr error
-	bytesOut []byte
-}
-
-func (s *stubCodec) Has(key string) (bool, error) {
-	if s.hasErr != nil {
-		return false, s.hasErr
-	}
-	_, ok := s.fields[key]
-	return ok, nil
-}
-
-func (s *stubCodec) SetString(key, value string) error {
-	if s.setErr != nil {
-		return s.setErr
-	}
-	s.fields[key] = value
-	return nil
-}
-
-func (s *stubCodec) Bytes() ([]byte, error) {
-	if s.bytesErr != nil {
-		return nil, s.bytesErr
-	}
-	return s.bytesOut, nil
-}
-
-// withParseFrontmatter swaps parseFrontmatter for the duration of t and
-// restores the original on cleanup.
-func withParseFrontmatter(t *testing.T, fn func(string) (frontmatterCodec, error)) {
-	t.Helper()
-	orig := parseFrontmatter
-	t.Cleanup(func() { parseFrontmatter = orig })
-	parseFrontmatter = fn
-}
-
-// withUpdateFrontmatterFile swaps updateFrontmatterFile for the duration of t
-// and restores the original on cleanup.
-func withUpdateFrontmatterFile(t *testing.T, fn func(string, func(frontmatterCodec) error) error) {
-	t.Helper()
-	orig := updateFrontmatterFile
-	t.Cleanup(func() { updateFrontmatterFile = orig })
-	updateFrontmatterFile = fn
 }
 
 func TestHasUID(t *testing.T) {
@@ -551,115 +590,6 @@ func TestHasUID(t *testing.T) {
 		_, err := HasUID("---\ntitle: Test\n# Missing closing delimiter")
 		if err == nil {
 			t.Error("HasUID() expected error for malformed frontmatter")
-		}
-	})
-
-	t.Run("propagates parse error", func(t *testing.T) {
-		errParse := errors.New("parse fail")
-		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
-			return nil, errParse
-		})
-		_, err := HasUID(testFrontmatterInput)
-		if !errors.Is(err, errParse) {
-			t.Errorf("HasUID() error = %v, want %v", err, errParse)
-		}
-	})
-
-	t.Run("propagates Has error", func(t *testing.T) {
-		errHas := errors.New("has fail")
-		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
-			return &stubCodec{hasErr: errHas}, nil
-		})
-		_, err := HasUID(testFrontmatterInput)
-		if !errors.Is(err, errHas) {
-			t.Errorf("HasUID() error = %v, want %v", err, errHas)
-		}
-	})
-}
-
-func TestProcessContentAtTimeErrorPaths(t *testing.T) {
-	t.Run("propagates parse error", func(t *testing.T) {
-		errParse := errors.New("parse fail")
-		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
-			return nil, errParse
-		})
-		_, err := ProcessContentAtTime(testFrontmatterInput, time.Now())
-		if !errors.Is(err, errParse) {
-			t.Errorf("ProcessContentAtTime() error = %v, want %v", err, errParse)
-		}
-	})
-
-	t.Run("propagates Has error", func(t *testing.T) {
-		errHas := errors.New("has fail")
-		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
-			return &stubCodec{hasErr: errHas}, nil
-		})
-		_, err := ProcessContentAtTime(testFrontmatterInput, time.Now())
-		if !errors.Is(err, errHas) {
-			t.Errorf("ProcessContentAtTime() error = %v, want %v", err, errHas)
-		}
-	})
-
-	t.Run("propagates SetString error", func(t *testing.T) {
-		errSet := errors.New("set fail")
-		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
-			return &stubCodec{fields: map[string]string{}, setErr: errSet}, nil
-		})
-		_, err := ProcessContentAtTime(testFrontmatterInput, time.Now())
-		if !errors.Is(err, errSet) {
-			t.Errorf("ProcessContentAtTime() error = %v, want %v", err, errSet)
-		}
-	})
-
-	t.Run("propagates Bytes error", func(t *testing.T) {
-		errBytes := errors.New("bytes fail")
-		withParseFrontmatter(t, func(string) (frontmatterCodec, error) {
-			return &stubCodec{fields: map[string]string{}, bytesErr: errBytes}, nil
-		})
-		_, err := ProcessContentAtTime(testFrontmatterInput, time.Now())
-		if !errors.Is(err, errBytes) {
-			t.Errorf("ProcessContentAtTime() error = %v, want %v", err, errBytes)
-		}
-	})
-}
-
-func TestProcessFileErrorPaths(t *testing.T) {
-	// writeRealFile creates a real file so the Lstat check in ProcessFile passes
-	// before the injected updateFrontmatterFile is invoked.
-	writeRealFile := func(t *testing.T) string {
-		t.Helper()
-		f := filepath.Join(t.TempDir(), "test.md")
-		if err := os.WriteFile(f, []byte("# test"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		return f
-	}
-
-	t.Run("propagates Has error in callback", func(t *testing.T) {
-		errHas := errors.New("has fail")
-		withUpdateFrontmatterFile(t, func(_ string, update func(frontmatterCodec) error) error {
-			return update(&stubCodec{hasErr: errHas})
-		})
-		err := ProcessFile(writeRealFile(t))
-		if err == nil {
-			t.Fatal("ProcessFile() expected error, got nil")
-		}
-		if !strings.Contains(err.Error(), "has fail") {
-			t.Errorf("ProcessFile() error = %v, want it to contain 'has fail'", err)
-		}
-	})
-
-	t.Run("propagates SetString error in callback", func(t *testing.T) {
-		errSet := errors.New("set fail")
-		withUpdateFrontmatterFile(t, func(_ string, update func(frontmatterCodec) error) error {
-			return update(&stubCodec{fields: map[string]string{}, setErr: errSet})
-		})
-		err := ProcessFile(writeRealFile(t))
-		if err == nil {
-			t.Fatal("ProcessFile() expected error, got nil")
-		}
-		if !strings.Contains(err.Error(), "set fail") {
-			t.Errorf("ProcessFile() error = %v, want it to contain 'set fail'", err)
 		}
 	})
 }

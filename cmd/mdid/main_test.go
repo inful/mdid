@@ -1,12 +1,237 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"errors"
 	"flag"
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
+
+// filePermissions keeps the files these tests create private to the test user.
+const filePermissions = 0o600
+
+// TestIsInteractiveTerminal is the regression test for `mdid < /dev/null`,
+// which must be treated as a redirection even though /dev/null is a character
+// device.
+func TestIsInteractiveTerminal(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = devNull.Close() })
+
+	regular := filepath.Join(t.TempDir(), "file.md")
+	if writeErr := os.WriteFile(regular, []byte("# hello"), filePermissions); writeErr != nil {
+		t.Fatal(writeErr)
+	}
+	regularFile, err := os.Open(regular) //nolint:gosec // path is built by the test
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = regularFile.Close() })
+
+	for _, tt := range []struct {
+		name          string
+		stdin, stdout *os.File
+	}{
+		{name: "null stdin is a redirect, not a terminal", stdin: devNull, stdout: regularFile},
+		{name: "a plain file on both ends is not a terminal", stdin: regularFile, stdout: regularFile},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			oldIn, oldOut := os.Stdin, os.Stdout
+			os.Stdin, os.Stdout = tt.stdin, tt.stdout
+			t.Cleanup(func() { os.Stdin, os.Stdout = oldIn, oldOut })
+
+			if isInteractiveTerminal() {
+				t.Error("isInteractiveTerminal() = true, want false")
+			}
+		})
+	}
+}
+
+func TestUsageListsEveryFlag(t *testing.T) {
+	resetFlagSet(t)
+	initFlags()
+
+	_, stderrPath := captureOutputFiles(t)
+	usage()
+
+	got := readFile(t, stderrPath)
+	for _, name := range []string{"-r", "-v", "-version"} {
+		if !strings.Contains(got, name) {
+			t.Errorf("usage() output does not mention %s:\n%s", name, got)
+		}
+	}
+}
+
+// The two messages the CLI prints in verbose mode.
+const (
+	msgUIDAdded   = "uid added"
+	msgUIDPresent = "uid already present"
+)
+
+// cliPath is the compiled CLI. TestMain builds it once so the tests can check
+// the real exit code and stdout/stderr split that main() produces, which no
+// in-process test can see because main() calls os.Exit.
+var cliPath string
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "mdid-cli-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+
+	if _, err := exec.LookPath("go"); err != nil {
+		// No toolchain, e.g. a test binary compiled elsewhere and run in a
+		// scratch container: skip what needs the CLI instead of failing all.
+		fmt.Fprintln(os.Stderr, "go not found in PATH: skipping the tests that build the CLI")
+		os.Exit(m.Run())
+	}
+
+	built, buildErr := buildCLI(dir)
+	if buildErr != nil {
+		fmt.Fprintln(os.Stderr, buildErr)
+		_ = os.RemoveAll(dir)
+		os.Exit(1)
+	}
+	cliPath = built
+
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// buildCLI compiles the CLI into dir, with a timeout so a stalled build fails
+// the test run instead of hanging it.
+func buildCLI(dir string) (string, error) {
+	path := filepath.Join(dir, "mdid")
+	if runtime.GOOS == "windows" {
+		path += ".exe"
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+
+	//nolint:gosec // fixed command; only the output path comes from this test
+	out, err := exec.CommandContext(ctx, "go", "build", "-o", path, ".").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("go build: %w\n%s", err, out)
+	}
+
+	return path, nil
+}
+
+// TestMainContract covers the only parts of the tool a script can see: the exit
+// code, what lands on stdout, and whether a named file was really updated.
+func TestMainContract(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		// args and wantUids are names inside the case's own directory, so no
+		// case can affect another. A file in wantUids is created first.
+		args     []string
+		stdin    string
+		wantCode int
+		wantOut  string
+		wantUids []string
+	}{
+		{name: "a good file succeeds", args: []string{"good.md"}, wantCode: 0, wantUids: []string{"good.md"}},
+		{name: "a missing file fails", args: []string{"nope.md"}, wantCode: 1},
+		{name: "a directory without -r fails", args: []string{"."}, wantCode: 1},
+		{
+			name:     "one bad path does not stop the rest",
+			args:     []string{"nope.md", "second.md"},
+			wantCode: 1,
+			wantUids: []string{"second.md"},
+		},
+		{name: "-version goes to stdout", args: []string{"-version"}, wantCode: 0, wantOut: "mdid version"},
+		{name: "stdin is echoed to stdout", stdin: "# hello", wantCode: 0, wantOut: "uid:"},
+		{name: "malformed stdin exits 1", stdin: "---\ntitle: bad\n# no close", wantCode: 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			for _, name := range tt.wantUids {
+				if writeErr := os.WriteFile(filepath.Join(dir, name), []byte("# hello"), filePermissions); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}
+
+			code, stdout, stderr := runCLI(t, resolvePaths(dir, tt.args), tt.stdin)
+			if code != tt.wantCode {
+				t.Errorf("mdid %v exited %d, want %d (stderr: %s)", tt.args, code, tt.wantCode, stderr)
+			}
+			if tt.wantOut != "" && !strings.Contains(stdout, tt.wantOut) {
+				t.Errorf("mdid %v stdout = %q, want it to contain %q", tt.args, stdout, tt.wantOut)
+			}
+			for _, name := range tt.wantUids {
+				if got := readFile(t, filepath.Join(dir, name)); !strings.Contains(got, "uid:") {
+					t.Errorf("mdid %v left %s without a uid", tt.args, name)
+				}
+			}
+		})
+	}
+}
+
+// resolvePaths turns the table's file names into paths under dir, leaving flags
+// such as -version alone.
+func resolvePaths(dir string, args []string) []string {
+	resolved := make([]string, 0, len(args))
+	for _, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			resolved = append(resolved, arg)
+			continue
+		}
+		resolved = append(resolved, filepath.Join(dir, arg))
+	}
+
+	return resolved
+}
+
+// runCLI runs the built CLI with args and stdin, and returns its exit code
+// along with what it wrote to stdout and stderr.
+func runCLI(t *testing.T, args []string, stdin string) (int, string, string) {
+	t.Helper()
+
+	if cliPath == "" {
+		t.Skip("no Go toolchain available to build the CLI")
+	}
+
+	//nolint:gosec // args come from this file's own table, paths are t.TempDir()
+	cmd := exec.CommandContext(t.Context(), cliPath, args...)
+	cmd.Stdin = strings.NewReader(stdin)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &stdout, &stderr
+
+	code := 0
+	if err := cmd.Run(); err != nil {
+		exitErr := &exec.ExitError{}
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("running mdid: %v", err)
+		}
+		code = exitErr.ExitCode()
+	}
+
+	return code, stdout.String(), stderr.String()
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+
+	content, err := os.ReadFile(path) //nolint:gosec // path is built by the test
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q) error = %v", path, err)
+	}
+
+	return string(content)
+}
 
 func resetFlagSet(t *testing.T) {
 	t.Helper()
@@ -133,8 +358,8 @@ func TestProcessStdin(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !strings.Contains(string(got), "uid already present") {
-			t.Fatalf("processStdin() stderr = %q, want 'uid already present'", string(got))
+		if !strings.Contains(string(got), msgUIDPresent) {
+			t.Fatalf("processStdin() stderr = %q, want %q", got, msgUIDPresent)
 		}
 	})
 }
@@ -294,7 +519,57 @@ func testProcessDirectoryAggregatesErrors(t *testing.T) {
 	}
 }
 
+// One unreadable directory used to end the walk, leaving the rest of the tree
+// without a uid and hiding the errors already collected.
+func testProcessDirectoryWalksPastUnreadableDir(t *testing.T) {
+	t.Helper()
+
+	setModes(t, true, false)
+
+	dir := t.TempDir()
+	blocked := filepath.Join(dir, "m_blocked")
+	if err := os.Mkdir(blocked, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(blocked, "hidden.md"), []byte("# hidden"), filePermissions); err != nil {
+		t.Fatal(err)
+	}
+	after := filepath.Join(dir, "z_after.md")
+	if err := os.WriteFile(after, []byte("# after"), filePermissions); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	// 0700, not 0600: a directory needs the execute bit to be traversable at cleanup.
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o700) }) //nolint:gosec // directory, not a file
+	if _, err := os.ReadDir(blocked); err == nil {
+		t.Skip("directory permissions are not enforced for this user")
+	}
+
+	err := processDirectory(dir)
+	if err == nil {
+		t.Fatal("processDirectory() expected an error for the unreadable directory")
+	}
+	if !strings.Contains(err.Error(), blocked) {
+		t.Errorf("processDirectory() error = %v, want it to name %s", err, blocked)
+	}
+
+	afterGot, readErr := os.ReadFile(after) //nolint:gosec
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(afterGot), "uid:") {
+		t.Error("processDirectory() stopped walking at the unreadable directory")
+	}
+}
+
 func TestProcessDirectory(t *testing.T) {
+	t.Run("keeps walking past an unreadable directory", func(t *testing.T) {
+		testProcessDirectoryWalksPastUnreadableDir(t)
+	})
+
 	t.Run("processes markdown and skips non-markdown", func(t *testing.T) {
 		testProcessDirectoryProcessesMarkdown(t)
 	})
@@ -308,70 +583,44 @@ func TestProcessDirectory(t *testing.T) {
 	})
 }
 
-func TestProcessFileVerboseReportsUIDAdded(t *testing.T) {
-	setModes(t, false, true)
-	path := filepath.Join(t.TempDir(), "doc.md")
-	if err := os.WriteFile(path, []byte("# hello"), filePermissions); err != nil {
-		t.Fatal(err)
-	}
+func TestProcessFileVerbose(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		content string
+		want    string
+	}{
+		{name: "reports an added uid", content: "# hello", want: msgUIDAdded},
+		{
+			name:    "reports a uid already present",
+			content: "---\nuid: 11111111-1111-4111-8111-111111111111\n---\n# hello",
+			want:    msgUIDPresent,
+		},
+		{name: "reports a filled placeholder as added", content: "---\nuid:\n---\n# hello", want: msgUIDAdded},
+		{
+			// A "uid:" inside a code fence in the body must not fool the
+			// verbose output into thinking the file has a frontmatter uid.
+			name:    "ignores a uid in the body",
+			content: "# hello\n\n```\nuid: not-a-real-uid\n```\n",
+			want:    msgUIDAdded,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			setModes(t, false, true)
+			path := filepath.Join(t.TempDir(), "doc.md")
+			if err := os.WriteFile(path, []byte(tt.content), filePermissions); err != nil {
+				t.Fatal(err)
+			}
 
-	_, stderrPath := captureOutputFiles(t)
-	if err := processFile(path); err != nil {
-		t.Fatalf("processFile() error = %v", err)
-	}
+			_, stderrPath := captureOutputFiles(t)
+			if err := processFile(path); err != nil {
+				t.Fatalf("processFile() error = %v", err)
+			}
 
-	got, err := os.ReadFile(stderrPath) //nolint:gosec
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(got), "uid added") {
-		t.Fatalf("processFile() stderr = %q, want 'uid added'", string(got))
-	}
-}
-
-func TestProcessFileVerboseReportsUIDPresent(t *testing.T) {
-	setModes(t, false, true)
-	path := filepath.Join(t.TempDir(), "doc.md")
-	content := "---\nuid: 11111111-1111-4111-8111-111111111111\n---\n# hello"
-	if err := os.WriteFile(path, []byte(content), filePermissions); err != nil {
-		t.Fatal(err)
-	}
-
-	_, stderrPath := captureOutputFiles(t)
-	if err := processFile(path); err != nil {
-		t.Fatalf("processFile() error = %v", err)
-	}
-
-	got, err := os.ReadFile(stderrPath) //nolint:gosec
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(got), "uid already present") {
-		t.Fatalf("processFile() stderr = %q, want 'uid already present'", string(got))
-	}
-}
-
-func TestProcessFileVerboseIgnoresUIDInBody(t *testing.T) {
-	// A "uid:" inside a code fence in the body must not fool the verbose
-	// output into thinking the file already has a frontmatter uid.
-	setModes(t, false, true)
-	path := filepath.Join(t.TempDir(), "doc.md")
-	content := "# hello\n\n```\nuid: not-a-real-uid\n```\n"
-	if err := os.WriteFile(path, []byte(content), filePermissions); err != nil {
-		t.Fatal(err)
-	}
-
-	_, stderrPath := captureOutputFiles(t)
-	if err := processFile(path); err != nil {
-		t.Fatalf("processFile() error = %v", err)
-	}
-
-	got, err := os.ReadFile(stderrPath) //nolint:gosec
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(got), "uid added") {
-		t.Fatalf("processFile() stderr = %q, want 'uid added'", string(got))
+			got := readFile(t, stderrPath)
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("processFile() stderr = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

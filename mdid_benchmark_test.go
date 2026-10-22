@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/inful/mdfm"
 )
 
 const benchmarkContentWithoutUID = `---
@@ -140,7 +142,10 @@ func BenchmarkProcessDocument(b *testing.B) {
 
 	for b.Loop() {
 		b.StopTimer()
-		doc := &stubDoc{fields: map[string]string{}}
+		doc, err := mdfm.ParseString(benchmarkContentWithoutUID)
+		if err != nil {
+			b.Fatal(err)
+		}
 		b.StartTimer()
 
 		if err := ProcessDocument(doc); err != nil {
@@ -156,7 +161,10 @@ func BenchmarkProcessDocumentAtTime(b *testing.B) {
 
 	for b.Loop() {
 		b.StopTimer()
-		doc := &stubDoc{fields: map[string]string{}}
+		doc, err := mdfm.ParseString(benchmarkContentWithoutUID)
+		if err != nil {
+			b.Fatal(err)
+		}
 		b.StartTimer()
 
 		if err := ProcessDocumentAtTime(doc, knownTime); err != nil {
