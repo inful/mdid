@@ -72,6 +72,74 @@ func TestUsageListsEveryFlag(t *testing.T) {
 	}
 }
 
+// docsDir is the path used by the permutation cases below.
+const docsDir = "docs"
+
+func TestPermuteArgs(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want []string
+	}{
+		{name: "already in order", args: []string{"-v", "-r", docsDir}, want: []string{"-v", "-r", docsDir}},
+		{name: "flag after a path", args: []string{"-r", docsDir, "-v"}, want: []string{"-r", "-v", docsDir}},
+		{name: "no flags", args: []string{"a.md", "b.md"}, want: []string{"a.md", "b.md"}},
+		{name: "a bare dash is a path", args: []string{"-"}, want: []string{"-"}},
+		{name: "everything after -- stays", args: []string{"-v", "--", "-weird.md"}, want: []string{"-v", "--", "-weird.md"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			got := permuteArgs(tt.args)
+			if strings.Join(got, " ") != strings.Join(tt.want, " ") {
+				t.Errorf("permuteArgs(%q) = %q, want %q", tt.args, got, tt.want)
+			}
+		})
+	}
+}
+
+// Finding 2: naming a non-markdown file must not touch it.
+func TestProcessPathRefusesNonMarkdown(t *testing.T) {
+	setModes(t, false, false)
+
+	for _, name := range []string{"Makefile", "notes.txt", "script.sh", "no-extension"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			if err := os.WriteFile(path, []byte("all:\n\techo hi\n"), filePermissions); err != nil {
+				t.Fatal(err)
+			}
+
+			err := processPath(path)
+			if err == nil {
+				t.Fatalf("processPath(%q) = nil, want a not-a-markdown error", name)
+			}
+			if !strings.Contains(err.Error(), "not a markdown file") {
+				t.Errorf("processPath(%q) error = %v, want 'not a markdown file'", name, err)
+			}
+			if got := readFile(t, path); got != "all:\n\techo hi\n" {
+				t.Errorf("processPath(%q) modified the file: %q", name, got)
+			}
+		})
+	}
+}
+
+func TestProcessPathAcceptsMarkdownExtensions(t *testing.T) {
+	setModes(t, false, false)
+
+	for _, name := range []string{"doc.md", "DOC.MD", "doc.markdown"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
+			if err := os.WriteFile(path, []byte("# hello"), filePermissions); err != nil {
+				t.Fatal(err)
+			}
+			if err := processPath(path); err != nil {
+				t.Fatalf("processPath(%q) error = %v", name, err)
+			}
+			if got := readFile(t, path); !strings.Contains(got, "uid:") {
+				t.Errorf("processPath(%q) did not add a uid", name)
+			}
+		})
+	}
+}
+
 // The two messages the CLI prints in verbose mode.
 const (
 	msgUIDAdded   = "uid added"
@@ -132,17 +200,21 @@ func buildCLI(dir string) (string, error) {
 
 // TestMainContract covers the only parts of the tool a script can see: the exit
 // code, what lands on stdout, and whether a named file was really updated.
+// cliCase is one end-to-end run of the CLI. args and wantUids are names inside
+// the case's own directory, so no case can affect another; a file in wantUids
+// is created before the run.
+type cliCase struct {
+	name     string
+	args     []string
+	stdin    string
+	wantCode int
+	wantOut  string
+	wantErr  string
+	wantUids []string
+}
+
 func TestMainContract(t *testing.T) {
-	for _, tt := range []struct {
-		name string
-		// args and wantUids are names inside the case's own directory, so no
-		// case can affect another. A file in wantUids is created first.
-		args     []string
-		stdin    string
-		wantCode int
-		wantOut  string
-		wantUids []string
-	}{
+	for _, tt := range []cliCase{
 		{name: "a good file succeeds", args: []string{"good.md"}, wantCode: 0, wantUids: []string{"good.md"}},
 		{name: "a missing file fails", args: []string{"nope.md"}, wantCode: 1},
 		{name: "a directory without -r fails", args: []string{"."}, wantCode: 1},
@@ -153,6 +225,13 @@ func TestMainContract(t *testing.T) {
 			wantUids: []string{"second.md"},
 		},
 		{name: "-version goes to stdout", args: []string{"-version"}, wantCode: 0, wantOut: "mdid version"},
+		{
+			name:     "a flag after the path still works",
+			args:     []string{"-v", "late.md", "-v"},
+			wantCode: 0,
+			wantErr:  msgUIDAdded,
+			wantUids: []string{"late.md"},
+		},
 		{name: "stdin is echoed to stdout", stdin: "# hello", wantCode: 0, wantOut: "uid:"},
 		{name: "malformed stdin exits 1", stdin: "---\ntitle: bad\n# no close", wantCode: 1},
 	} {
@@ -165,18 +244,28 @@ func TestMainContract(t *testing.T) {
 			}
 
 			code, stdout, stderr := runCLI(t, resolvePaths(dir, tt.args), tt.stdin)
-			if code != tt.wantCode {
-				t.Errorf("mdid %v exited %d, want %d (stderr: %s)", tt.args, code, tt.wantCode, stderr)
-			}
-			if tt.wantOut != "" && !strings.Contains(stdout, tt.wantOut) {
-				t.Errorf("mdid %v stdout = %q, want it to contain %q", tt.args, stdout, tt.wantOut)
-			}
+			checkCLIOutput(t, tt, code, stdout, stderr)
 			for _, name := range tt.wantUids {
 				if got := readFile(t, filepath.Join(dir, name)); !strings.Contains(got, "uid:") {
 					t.Errorf("mdid %v left %s without a uid", tt.args, name)
 				}
 			}
 		})
+	}
+}
+
+// checkCLIOutput asserts the exit code and the output a case expects.
+func checkCLIOutput(t *testing.T, tt cliCase, code int, stdout, stderr string) {
+	t.Helper()
+
+	if code != tt.wantCode {
+		t.Errorf("mdid %v exited %d, want %d (stderr: %s)", tt.args, code, tt.wantCode, stderr)
+	}
+	if tt.wantOut != "" && !strings.Contains(stdout, tt.wantOut) {
+		t.Errorf("mdid %v stdout = %q, want it to contain %q", tt.args, stdout, tt.wantOut)
+	}
+	if tt.wantErr != "" && !strings.Contains(stderr, tt.wantErr) {
+		t.Errorf("mdid %v stderr = %q, want it to contain %q", tt.args, stderr, tt.wantErr)
 	}
 }
 

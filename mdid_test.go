@@ -2,6 +2,7 @@ package mdid
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,12 +31,14 @@ func isValidV7UUID(s string) bool {
 // parseV7Timestamp decodes a canonical 36-char UUID string and returns the
 // millisecond timestamp embedded in it.
 func parseV7Timestamp(uid string) (time.Time, error) {
-	var b [16]byte
-	raw, err := hex.DecodeString(strings.ReplaceAll(uid, "-", ""))
-	if err != nil || len(raw) != len(b) {
+	clean := strings.ReplaceAll(uid, "-", "")
+	if len(clean) != 32 {
 		return time.Time{}, fmt.Errorf("invalid UUID format: %q", uid)
 	}
-	copy(b[:], raw)
+	var b [16]byte
+	if _, err := hex.Decode(b[:], []byte(clean)); err != nil {
+		return time.Time{}, fmt.Errorf("invalid UUID format: %q", uid)
+	}
 
 	if b[6]>>4 != 7 {
 		return time.Time{}, fmt.Errorf("expected UUID v7, got v%d", b[6]>>4)
@@ -76,6 +79,18 @@ func mustBytes(t *testing.T, doc *mdfm.Document) string {
 	}
 
 	return string(out)
+}
+
+// mustModTime returns a file's modification time.
+func mustModTime(t *testing.T, path string) time.Time {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat(%q) error = %v", path, err)
+	}
+
+	return info.ModTime()
 }
 
 // mustReadFile reads a file the test just wrote.
@@ -262,6 +277,64 @@ func TestHasUIDRejectsPlaceholderUID(t *testing.T) {
 			t.Errorf("HasUID(%q) = true, want false for a placeholder uid", input)
 		}
 	}
+}
+
+// A uid inherited through a YAML merge key must never be replaced: mdid cannot
+// see it, and a new uid would shadow it.
+func TestMergeKeyUIDIsRefused(t *testing.T) {
+	const inherited = "---\ndefaults: &d\n  uid: 11111111-1111-4111-8111-111111111111\n<<: *d\n---\n# Content"
+
+	t.Run("HasUID reports the merge", func(t *testing.T) {
+		if _, err := HasUID(inherited); !errors.Is(err, ErrMergeKey) {
+			t.Errorf("HasUID() error = %v, want ErrMergeKey", err)
+		}
+	})
+
+	t.Run("ProcessContent refuses instead of adding one", func(t *testing.T) {
+		got, err := ProcessContent(inherited)
+		if !errors.Is(err, ErrMergeKey) {
+			t.Fatalf("ProcessContent() error = %v, want ErrMergeKey", err)
+		}
+		if strings.Contains(got, "uid:") && !strings.Contains(got, "11111111-1111-4111-8111-111111111111") {
+			t.Errorf("ProcessContent() returned an unexpected uid: %q", got)
+		}
+	})
+}
+
+// A literal uid overrides a merged one, so the merge does not apply.
+func TestLiteralUIDWinsOverMergeKey(t *testing.T) {
+	const withLiteral = "---\ndefaults: &d\n  uid: 11111111-1111-4111-8111-111111111111\nuid: 22222222-2222-4222-8222-222222222222\n<<: *d\n---\n# Content"
+
+	has, err := HasUID(withLiteral)
+	if err != nil {
+		t.Fatalf("HasUID() error = %v", err)
+	}
+	if !has {
+		t.Error("HasUID() = false, want true: a literal uid overrides a merged one")
+	}
+}
+
+func TestMergeKeyFileIsLeftAlone(t *testing.T) {
+	const inherited = "---\ndefaults: &d\n  uid: 11111111-1111-4111-8111-111111111111\n<<: *d\n---\n# Content"
+
+	t.Run("ProcessFile leaves the file untouched", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "inherited.md")
+		if err := os.WriteFile(path, []byte(inherited), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		before := mustReadFile(t, path)
+		mtimeBefore := mustModTime(t, path)
+
+		if err := ProcessFile(path); !errors.Is(err, ErrMergeKey) {
+			t.Fatalf("ProcessFile() error = %v, want ErrMergeKey", err)
+		}
+		if after := mustReadFile(t, path); after != before {
+			t.Error("ProcessFile() rewrote a file whose uid comes from a merge key")
+		}
+		if mustModTime(t, path) != mtimeBefore {
+			t.Error("ProcessFile() changed the mtime of a file it refused to process")
+		}
+	})
 }
 
 func TestProcessContentFillsPlaceholderUID(t *testing.T) {

@@ -6,6 +6,7 @@ package mdid
 
 import (
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -16,6 +17,16 @@ import (
 
 // UIDField is the field name used in frontmatter for the unique identifier.
 const UIDField = "uid"
+
+// mergeKey is the YAML merge key: frontmatter may pull keys in from an anchor
+// with "<<: *anchor".
+const mergeKey = "<<"
+
+// ErrMergeKey reports frontmatter that uses a YAML merge key with no literal
+// uid of its own. The merged keys hold a uid that only a full YAML parse would
+// reveal, so mdid refuses to guess instead of adding an identifier that would
+// shadow the inherited one.
+var ErrMergeKey = errors.New("frontmatter uses a YAML merge key; cannot tell whether it already has a uid")
 
 // FrontmatterDocument is the minimal interface required to add a uid to a
 // document's frontmatter. *mdfm.Document satisfies this interface.
@@ -149,8 +160,21 @@ func HasUID(content string) (bool, error) {
 // placeholder gets a real identifier instead of being reported as done.
 func hasUID(doc FrontmatterDocument) (bool, error) {
 	present, err := doc.Has(UIDField)
-	if err != nil || !present {
+	if err != nil {
 		return false, err
+	}
+	if !present {
+		// A merge key can supply the uid we cannot see. Adding one here would
+		// shadow the inherited identifier, so refuse instead of guessing.
+		merged, mergeErr := doc.Has(mergeKey)
+		if mergeErr != nil {
+			return false, mergeErr
+		}
+		if merged {
+			return false, ErrMergeKey
+		}
+
+		return false, nil
 	}
 
 	// A usable uid is a non-empty string. `uid: null` decodes to a nil value

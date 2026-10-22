@@ -37,6 +37,31 @@ func initFlags() {
 	flag.Usage = usage
 }
 
+// permuteArgs moves flags in front of paths, keeping the order within each
+// group. A bare "-" is a path, not a flag, and everything from "--" onwards is
+// left where it is.
+func permuteArgs(args []string) []string {
+	flags := make([]string, 0, len(args))
+	paths := make([]string, 0, len(args))
+	afterSeparator := false
+
+	for _, arg := range args {
+		switch {
+		case afterSeparator:
+			paths = append(paths, arg)
+		case arg == "--":
+			afterSeparator = true
+			paths = append(paths, arg)
+		case len(arg) > 1 && strings.HasPrefix(arg, "-"):
+			flags = append(flags, arg)
+		default:
+			paths = append(paths, arg)
+		}
+	}
+
+	return append(flags, paths...)
+}
+
 func usage() {
 	fmt.Fprintf(os.Stderr, "mdid - Markdown ID Tool %s\n\n", version)
 	fmt.Fprintf(os.Stderr, "Usage: mdid [options] <file|directory>...\n")
@@ -52,7 +77,13 @@ func usage() {
 
 func main() {
 	initFlags()
-	flag.Parse()
+	// Go's flag package stops at the first non-flag, so `mdid -r docs/ -v`
+	// would read -v as a path. All three flags are boolean, so moving the
+	// flags in front of the paths is safe.
+	if err := flag.CommandLine.Parse(permuteArgs(os.Args[1:])); err != nil {
+		usage()
+		os.Exit(exitCodeUsage)
+	}
 
 	if showVersion {
 		_, _ = fmt.Fprintf(os.Stdout, "mdid version %s\n", version)
@@ -101,7 +132,23 @@ func processPath(path string) error {
 		return processDirectory(path)
 	}
 
+	// The walk only touches markdown, and so must an explicitly named file:
+	// writing frontmatter into a Makefile breaks it.
+	if !isMarkdown(path) {
+		return fmt.Errorf("'%s' is not a markdown file", path)
+	}
+
 	return processFile(path)
+}
+
+// isMarkdown reports whether path has a markdown extension.
+func isMarkdown(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".md", ".markdown":
+		return true
+	default:
+		return false
+	}
 }
 
 // isInteractiveTerminal reports whether stdin and stdout are the same terminal.
@@ -161,7 +208,7 @@ func processDirectory(dir string) error {
 			errs = append(errs, err.Error())
 			return nil
 		}
-		if d.Type()&os.ModeSymlink != 0 || d.IsDir() || !strings.HasSuffix(strings.ToLower(path), ".md") {
+		if d.Type()&os.ModeSymlink != 0 || d.IsDir() || !isMarkdown(path) {
 			return nil
 		}
 		if err := processFile(path); err != nil {

@@ -69,11 +69,22 @@ If the file already contains a usable `uid`, it is left completely untouched.
 mdid file1.md file2.md file3.md
 ```
 
+Files named on the command line must have a markdown extension (`.md` or
+`.markdown`) too, so `mdid Makefile` fails instead of writing frontmatter into
+a build file.
+
 #### Process directory recursively
 
 ```sh
 mdid -r docs/
 ```
+
+A directory given on the command line must be walked with `-r`, and it must not
+be a symlink. Naming a file inside a symlinked directory works and writes
+through to the real directory.
+
+Flags may come before or after the paths: `mdid -r docs/ -v` behaves like
+`mdid -v -r docs/`.
 
 #### Verbose output
 
@@ -236,10 +247,24 @@ a larger diff than the one new line:
 - **Nested YAML is re-indented** from 2 spaces to 4. `- one` becomes `    - one`.
   The YAML means exactly the same thing; the text does not.
 - Comments, quoting style, long lines, dates and literal blocks are preserved.
+- A YAML merge key comes back with its explicit tag: `<<: *defaults` becomes
+  `!!merge <<: *defaults`. It still merges the same way.
 - Line endings (LF or CRLF) and the file's permissions are preserved, and a
   UTF-8 BOM is dropped.
+- **Extended attributes are not preserved.** The file is written as a new file
+  and moved into place, so macOS Finder tags, quarantine flags and similar
+  metadata are lost. Hard links break the same way: after mdid, the other name
+  for the file still points at the old content.
 - Files that already have a usable `uid` are not touched at all, so later runs
   are no-ops.
+
+## Frontmatter mdid will not change
+
+If the frontmatter uses a YAML merge key (`<<: *anchor`) and has no `uid` key
+of its own, mdid cannot see whether the merged keys already supply one. It
+reports an error and leaves the file alone rather than adding an identifier
+that would shadow the inherited one. Add a literal `uid:` to the frontmatter,
+or drop the merge key, to let mdid work on such a file.
 
 ## Development
 
