@@ -264,12 +264,17 @@ a larger diff than the one new line:
 - Comments, quoting style, long lines, dates and literal blocks are preserved.
 - A YAML merge key comes back with its explicit tag: `<<: *defaults` becomes
   `!!merge <<: *defaults`. It still merges the same way.
-- Line endings (LF or CRLF) and the file's permissions are preserved, and a
-  UTF-8 BOM is dropped.
-- **Extended attributes are not preserved.** The file is written as a new file
-  and moved into place, so macOS Finder tags, quarantine flags and similar
-  metadata are lost. Hard links break the same way: after mdid, the other name
-  for the file still points at the old content.
+- Line endings (LF or CRLF), the file's permissions and a UTF-8 BOM are
+  preserved, and a block closed with `...` keeps its `...`.
+- **Extended attributes, hard links and the file's identity are preserved.**
+  The file is rewritten in place, so macOS Finder tags, quarantine flags and
+  similar metadata stay, and every hard link to the file sees the new content.
+- The write is **not atomic**: the file is written and only then truncated, so a
+  write that fails partway leaves the file at its original length rather than a
+  short one, but mdid killed mid-write can leave a partly written file.
+- A read-only markdown file (mode `0444`, or owned by another user) **cannot be
+  updated**: the write happens in place, so mdid needs write permission on the
+  file itself and not only on its directory.
 - Files that already have a usable `uid` are not touched at all, so later runs
   are no-ops.
 

@@ -81,6 +81,49 @@ func mustBytes(t *testing.T, doc *mdfm.Document) string {
 	return string(out)
 }
 
+// TestProcessFileKeepsFileIdentity guards the properties mdid inherits from
+// mdfm's in-place write: the file keeps its inode (so hard links follow) and
+// its permissions. A regression here silently loses data on every write.
+func TestProcessFileKeepsFileIdentity(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "linked.md")
+	//nolint:gosec // 0640 is the point of the test: the mode must survive
+	if err := os.WriteFile(path, []byte("# hello"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "other.md")
+	if err := os.Link(path, other); err != nil {
+		t.Skipf("os.Link not supported: %v", err)
+	}
+
+	before := mustStat(t, path)
+	if err := ProcessFile(path); err != nil {
+		t.Fatalf("ProcessFile() error = %v", err)
+	}
+
+	after := mustStat(t, path)
+	if !os.SameFile(before, after) {
+		t.Error("ProcessFile() replaced the file, so hard links and extended attributes are lost")
+	}
+	if after.Mode().Perm() != 0o640 {
+		t.Errorf("ProcessFile() permissions = %v, want 0640", after.Mode().Perm())
+	}
+	if got := mustReadFile(t, other); !strings.Contains(got, "uid:") {
+		t.Error("the hard-linked copy does not see the uid, so the two names disagree")
+	}
+}
+
+// mustStat returns a file's FileInfo for the same-file and permission checks.
+func mustStat(t *testing.T, path string) os.FileInfo {
+	t.Helper()
+
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("os.Stat(%q) error = %v", path, err)
+	}
+
+	return info
+}
+
 // mustModTime returns a file's modification time.
 func mustModTime(t *testing.T, path string) time.Time {
 	t.Helper()
