@@ -1,5 +1,5 @@
-github.com/inful/mdfm v0.3.0 h1:QrLIa63jm4o64W2+Gm34zI3aAsgnqI7WC7jxj9bEfAE=
-github.com/inful/mdfm v0.3.0/go.mod h1:D8RVg6Zzz4bekTwuvr8pKDRb3QvIaV9/VQ4c1Y0nNTo=
+github.com/inful/mdfm v0.3.1 h1:eLTg0Z7u4H5ulnwF1P0EBnw0DOVyZSUAiDJJhCaorw0=
+github.com/inful/mdfm v0.3.1/go.mod h1:D8RVg6Zzz4bekTwuvr8pKDRb3QvIaV9/VQ4c1Y0nNTo=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405 h1:yhCVgyC4o1eVCa2tZl7eS0r+SDo693bJlVdllGtEeKM=
 gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/yaml.v3 v3.0.1 h1:fxVm/GzAzEWqLHuvctI91KS9hhNmmWOoWu0XTYJS7CA=

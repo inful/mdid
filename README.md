@@ -279,9 +279,9 @@ a larger diff than the one new line:
 - **Extended attributes, hard links and the file's identity are preserved.**
   The file is rewritten in place, so macOS Finder tags, quarantine flags and
   similar metadata stay, and every hard link to the file sees the new content.
-- The write is **not atomic**: the file is written and only then truncated, so a
-  write that fails partway leaves the file at its original length rather than a
-  short one, but mdid killed mid-write can leave a partly written file.
+- The write is **not atomic**: the file is written in place and only then
+  truncated. A write that fails partway puts the original bytes back, but
+  mdid killed mid-write can still leave a partly written file.
 - A read-only markdown file (mode `0444`, or owned by another user) **cannot be
   updated**: the write happens in place, so mdid needs write permission on the
   file itself and not only on its directory.
